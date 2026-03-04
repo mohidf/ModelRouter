@@ -13,7 +13,6 @@ A self-optimizing AI model router that dynamically selects the best LLM provider
 - **Epsilon-greedy exploration** — occasionally routes to less-used models to discover better options
 - **Escalation** — when classifier confidence is low, automatically retries with a higher-tier model
 - **Cost-aware routing** — `preferCost` and `optimizationMode` options bias routing toward cheaper models
-- **Dark-mode dashboard** — Prompt, Metrics, and Insights tabs with routing decision visualization
 
 ---
 
