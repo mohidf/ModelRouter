@@ -1,50 +1,14 @@
-/**
- * strategyEngine.ts
- *
- * Data-driven model selection with epsilon-greedy exploration.
- *
- * Given a (taskType, complexity), the engine:
- *   1. Falls back to providerManager.resolve() when no historical data exists.
- *   2. With probability epsilon, picks a random (provider, tier) — exploration.
- *   3. Otherwise, scores every recorded bucket and picks the highest — exploitation.
- *
- * Scoring formula (higher is better):
- *
- *   score = (confidenceWeight  × avgConfidence)
- *         - (costWeight        × avgCostUsd)
- *         - (latencyWeight     × avgLatencyMs)
- *         - (escalationWeight  × escalationRate)
- *
- * Weight resolution order (each step overrides the previous):
- *   1. Per-domain defaults  (DEFAULT_TASK_WEIGHTS)
- *   2. Environment variable overrides  (CODE_WEIGHTS, MATH_WEIGHTS, etc.)
- *   3. Per-request optimization mode preset  ('cost' | 'quality')
- *   4. Per-request custom weights
- */
-
 import type { TaskDomain, TaskComplexity, ModelTier } from '../providers/types';
 import type { ResolvedModel } from '../providers/providerManager';
 import { providerManager } from '../providers';
 import { performanceStore, type PerformanceStats } from './performanceStore';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 const ALL_TIERS: readonly ModelTier[] = ['cheap', 'balanced', 'premium'];
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface TaskWeights {
-  /** Reward per unit of average confidence (range 0–1). */
   confidenceWeight: number;
-  /** Penalty per USD of average cost per call. */
   costWeight: number;
-  /** Penalty per millisecond of average latency. */
   latencyWeight: number;
-  /** Penalty per unit of escalation rate (range 0–1). */
   escalationWeight: number;
 }
 
@@ -55,27 +19,24 @@ export interface WeightOverrideConfig {
   customWeights?: Partial<TaskWeights>;
 }
 
-// ---------------------------------------------------------------------------
-// Per-domain default weights
-// ---------------------------------------------------------------------------
-
+// Default weights per task domain
 export const DEFAULT_TASK_WEIGHTS: Readonly<Record<TaskDomain, TaskWeights>> = {
   coding: {
-    confidenceWeight: 1.5,   // Code quality matters
+    confidenceWeight: 1.5,
     costWeight:       8.0,
     latencyWeight:    0.001,
-    escalationWeight: 1.2,   // Re-runs are costly
+    escalationWeight: 1.2,
   },
   math: {
-    confidenceWeight: 2.0,   // Correctness is critical
+    confidenceWeight: 2.0,
     costWeight:       8.0,
     latencyWeight:    0.001,
-    escalationWeight: 2.0,   // Strong penalty for wrong answers requiring retry
+    escalationWeight: 2.0,
   },
   creative: {
     confidenceWeight: 1.0,
-    costWeight:       12.0,  // Cost-sensitive — typically volume tasks
-    latencyWeight:    0.0005, // Latency matters less for creative
+    costWeight:       12.0,
+    latencyWeight:    0.0005,
     escalationWeight: 0.8,
   },
   general: {
@@ -86,11 +47,7 @@ export const DEFAULT_TASK_WEIGHTS: Readonly<Record<TaskDomain, TaskWeights>> = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// Optimization mode presets
-// Applied on top of domain defaults when a per-request mode is specified.
-// ---------------------------------------------------------------------------
-
+// Presets applied when a per-request optimizationMode is set
 const OPTIMIZATION_PRESETS: Record<Exclude<OptimizationMode, 'balanced'>, Partial<TaskWeights>> = {
   cost: {
     confidenceWeight: 0.8,
@@ -106,11 +63,7 @@ const OPTIMIZATION_PRESETS: Record<Exclude<OptimizationMode, 'balanced'>, Partia
   },
 };
 
-// ---------------------------------------------------------------------------
-// Environment variable parsing
 // Format: CODE_WEIGHTS=confidence:2.0,cost:0.5,latency:0.2,escalation:1.0
-// ---------------------------------------------------------------------------
-
 function parseWeightsEnv(envVar: string | undefined): Partial<TaskWeights> | null {
   if (!envVar) return null;
   const result: Partial<TaskWeights> = {};
@@ -146,55 +99,24 @@ function buildEffectiveWeights(): Record<TaskDomain, TaskWeights> {
   return result;
 }
 
-// Computed once at module load (domain defaults + env var overrides)
 const EFFECTIVE_WEIGHTS = buildEffectiveWeights();
 
-// ---------------------------------------------------------------------------
-// Result type
-// ---------------------------------------------------------------------------
-
 export interface StrategyDecision {
-  /** The resolved model ready to pass to providerManager.dispatch(). */
   resolved: ResolvedModel;
-  /** The winning performance bucket. Null when exploration or fallback was used. */
   winningStats: PerformanceStats | null;
-  /** Exploitation score of the winning bucket. Null when exploration or fallback was used. */
   score: number | null;
-  /** True when no historical data was available — default routing used. */
   usedFallback: boolean;
-  /** True when the result was chosen by random exploration rather than best-score. */
   explored: boolean;
-  /** All scored candidates for this taskType, sorted best-first. Empty during fallback. */
   rankedOptions: Array<PerformanceStats & { score: number }>;
 }
 
-// ---------------------------------------------------------------------------
-// StrategyEngine
-// ---------------------------------------------------------------------------
-
 export class StrategyEngine {
-  /**
-   * Epsilon-greedy exploration probability (range 0–1).
-   * At each call, a uniform random draw is taken:
-   *   < epsilon  → explore: pick a random registered (provider, tier)
-   *   ≥ epsilon  → exploit: pick the highest-scoring bucket
-   * Only active when historical data exists; ignored during fallback.
-   */
   readonly epsilon: number;
 
   constructor(epsilon = 0.1) {
     this.epsilon = epsilon;
   }
 
-  // ── Weight resolution ──────────────────────────────────────────────────────
-
-  /**
-   * Resolve the effective weights for a task type.
-   *
-   * Resolution order (later overrides earlier):
-   *   domain defaults → env var overrides (applied at startup) →
-   *   optimization mode preset → custom weights from request
-   */
   resolveWeights(taskType: TaskDomain, override?: WeightOverrideConfig): TaskWeights {
     let weights: TaskWeights = EFFECTIVE_WEIGHTS[taskType];
 
@@ -210,16 +132,6 @@ export class StrategyEngine {
     return weights;
   }
 
-  // ── Core selection ─────────────────────────────────────────────────────────
-
-  /**
-   * Choose a (provider, tier) for the given (taskType, complexity).
-   *
-   * Decision order:
-   *   1. No historical data          → fallback (providerManager.resolve)
-   *   2. Math.random() < epsilon     → explore  (random registered option)
-   *   3. Otherwise                   → exploit  (highest-scoring bucket)
-   */
   async choose(
     taskType: TaskDomain,
     complexity: TaskComplexity,
@@ -229,11 +141,11 @@ export class StrategyEngine {
 
     if (candidates.length === 0) {
       return {
-        resolved:     providerManager.resolve(taskType, complexity),
-        winningStats: null,
-        score:        null,
-        usedFallback: true,
-        explored:     false,
+        resolved:      providerManager.resolve(taskType, complexity),
+        winningStats:  null,
+        score:         null,
+        usedFallback:  true,
+        explored:      false,
         rankedOptions: [],
       };
     }
@@ -250,14 +162,6 @@ export class StrategyEngine {
     return { ...this.exploit(candidates, weights), rankedOptions };
   }
 
-  // ── Analytics ──────────────────────────────────────────────────────────────
-
-  /**
-   * Return all performance buckets for a taskType, each annotated with its
-   * exploitation score, sorted best-first.
-   *
-   * Used by the /performance endpoint to produce ranked comparisons.
-   */
   async rankStats(
     taskType: TaskDomain,
     override?: WeightOverrideConfig,
@@ -268,8 +172,6 @@ export class StrategyEngine {
       .map(s => ({ ...s, score: this.scoreStats(s, weights) }))
       .sort((a, b) => b.score - a.score);
   }
-
-  // ── Private: exploration ───────────────────────────────────────────────────
 
   private exploreRandom(taskType: TaskDomain): Omit<StrategyDecision, 'rankedOptions'> {
     const providers = providerManager.listProviders();
@@ -290,8 +192,6 @@ export class StrategyEngine {
 
     return { resolved, winningStats: null, score: null, usedFallback: false, explored: true };
   }
-
-  // ── Private: exploitation ──────────────────────────────────────────────────
 
   private exploit(candidates: PerformanceStats[], weights: TaskWeights): Omit<StrategyDecision, 'rankedOptions'> {
     let winner:    PerformanceStats | null = null;
@@ -318,8 +218,6 @@ export class StrategyEngine {
 
     return { resolved, winningStats: w, score: bestScore, usedFallback: false, explored: false };
   }
-
-  // ── Private: scoring ───────────────────────────────────────────────────────
 
   private scoreStats(stats: PerformanceStats, weights: TaskWeights): number {
     return (

@@ -1,9 +1,7 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-/* ──────────────────────────────────────────────────────────────
-   Code blocks — ChatGPT style
-   ────────────────────────────────────────────────────────────── */
+/* code blocks */
 
 .prose pre {
   background: #1e1e1e !important;
@@ -22,7 +20,7 @@
   color: inherit !important;
 }
 
-/* Inline code */
+/* inline code */
 .prose code:not(pre code) {
   background: #2f2f2f;
   color: #ececec;
@@ -38,15 +36,13 @@
   content: none;
 }
 
-/* Prevent hljs from overriding pre background */
+/* prevent hljs from overriding pre background */
 .hljs {
   background: transparent !important;
   padding: 0 !important;
 }
 
-/* ──────────────────────────────────────────────────────────────
-   ChatGPT prose variable overrides
-   ────────────────────────────────────────────────────────────── */
+/* prose theme */
 
 .prose-chat {
   --tw-prose-body: #ececec;
@@ -64,9 +60,29 @@
   --tw-prose-td-borders: #3f3f3f;
 }
 
-.prose-chat a              { color: #34d399; text-decoration: none; }
-.prose-chat a:hover        { text-decoration: underline; }
-.prose-chat blockquote     { border-left-color: #3f3f3f; color: #b4b4b4; }
-.prose-chat th             { background: #2f2f2f; color: #b4b4b4; }
-.prose-chat p              { margin-bottom: 0.75em; }
-.prose-chat p:last-child   { margin-bottom: 0; }
+.prose-chat a {
+  color: #34d399;
+  text-decoration: none;
+}
+
+.prose-chat a:hover {
+  text-decoration: underline;
+}
+
+.prose-chat blockquote {
+  border-left-color: #3f3f3f;
+  color: #b4b4b4;
+}
+
+.prose-chat th {
+  background: #2f2f2f;
+  color: #b4b4b4;
+}
+
+.prose-chat p {
+  margin-bottom: 0.75em;
+}
+
+.prose-chat p:last-child {
+  margin-bottom: 0;
+}
