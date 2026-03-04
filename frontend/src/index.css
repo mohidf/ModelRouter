@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* ──────────────────────────────────────────────────────────────
+   Code blocks — ChatGPT style
+   ────────────────────────────────────────────────────────────── */
+
+.prose pre {
+  background: #1e1e1e !important;
+  border: 1px solid #3f3f3f;
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.prose pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: inherit !important;
+}
+
+/* Inline code */
+.prose code:not(pre code) {
+  background: #2f2f2f;
+  color: #ececec;
+  border: 1px solid #3f3f3f;
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-weight: 400;
+}
+
+.prose code:not(pre code)::before,
+.prose code:not(pre code)::after {
+  content: none;
+}
+
+/* Prevent hljs from overriding pre background */
+.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   ChatGPT prose variable overrides
+   ────────────────────────────────────────────────────────────── */
+
+.prose-chat {
+  --tw-prose-body: #ececec;
+  --tw-prose-headings: #ececec;
+  --tw-prose-lead: #b4b4b4;
+  --tw-prose-links: #34d399;
+  --tw-prose-bold: #ececec;
+  --tw-prose-counters: #8e8e8e;
+  --tw-prose-bullets: #8e8e8e;
+  --tw-prose-hr: #3f3f3f;
+  --tw-prose-quotes: #b4b4b4;
+  --tw-prose-quote-borders: #3f3f3f;
+  --tw-prose-captions: #8e8e8e;
+  --tw-prose-th-borders: #3f3f3f;
+  --tw-prose-td-borders: #3f3f3f;
+}
+
+.prose-chat a              { color: #34d399; text-decoration: none; }
+.prose-chat a:hover        { text-decoration: underline; }
+.prose-chat blockquote     { border-left-color: #3f3f3f; color: #b4b4b4; }
+.prose-chat th             { background: #2f2f2f; color: #b4b4b4; }
+.prose-chat p              { margin-bottom: 0.75em; }
+.prose-chat p:last-child   { margin-bottom: 0; }

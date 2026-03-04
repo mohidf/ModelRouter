@@ -1,0 +1,27 @@
+{
+  "name": "model-router-ai-backend",
+  "version": "1.0.0",
+  "description": "ModelRouter AI — intelligent LLM routing backend",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "test:db": "ts-node src/scripts/testConnection.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "openai": "^6.25.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "nodemon": "^3.1.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.2"
+  }
+}

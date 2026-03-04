@@ -1,0 +1,15 @@
+{
+  "name": "model-router-ai",
+  "version": "1.0.0",
+  "description": "Self-optimizing AI model router — dynamically selects the best LLM provider based on task type, cost, and historical performance.",
+  "private": true,
+  "scripts": {
+    "backend:dev": "cd backend && npm run dev",
+    "backend:build": "cd backend && npm run build",
+    "backend:start": "cd backend && npm start",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:preview": "cd frontend && npm run preview",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+  }
+}
