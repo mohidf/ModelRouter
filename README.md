@@ -217,16 +217,6 @@ See [docs/routing-strategy.md](docs/routing-strategy.md) for a deeper explanatio
 
 ---
 
-## Future Improvements
-
-- [ ] Streaming responses (Server-Sent Events)
-- [ ] User authentication and per-user history
-- [ ] Additional providers (Google Gemini, Cohere)
-- [ ] Automated prompt evaluation and scoring
-- [ ] Cost budget alerts
-- [ ] Export routing logs as CSV
-
----
 
 ## License
 
