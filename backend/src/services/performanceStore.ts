@@ -4,14 +4,19 @@
  * Persistent performance tracking backed by Supabase (PostgreSQL).
  *
  * Each row in the `performance_stats` table represents a unique
- * (provider, tier, taskType) bucket.  Rolling averages are maintained
- * atomically in the database via the `record_performance` PL/pgSQL RPC,
- * which applies the formula:
- *
- *   newAvg = (oldAvg * totalRequests + newValue) / (totalRequests + 1)
+ * (provider, tier, taskType) bucket. Rolling averages are maintained
+ * atomically in the database via the `record_performance` PL/pgSQL RPC.
+ * The RPC receives `p_alpha` (EMA smoothing factor from config.emaAlpha)
+ * and applies it to update the stored averages — refer to the RPC source
+ * for the exact formula.
  *
  * All public methods are async. Callers that don't need to await the write
  * (e.g. hot-path routing) should fire-and-forget with a `.catch()` handler.
+ *
+ * Scoring: do NOT add a scoring function here. StrategyEngine owns scoring
+ * (strategyEngine.scoreStats / strategyEngine.rankStats). Duplicating it with
+ * different weights causes the UI and the router to disagree on which
+ * provider is "best".
  */
 
 import type { TaskDomain, ModelTier } from '../providers/types';
@@ -44,12 +49,6 @@ export interface PerformanceStats {
   /** Fraction of calls that triggered escalation (0–1). */
   escalationRate:    number;
   averageCostUsd:    number;
-}
-
-export interface BestOptionResult {
-  stats: PerformanceStats;
-  /** Composite score used for ranking — higher is better. */
-  score: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,33 +145,6 @@ export class PerformanceStore {
     return (data as DbRow[]).map(row => this.toStats(row));
   }
 
-  /**
-   * Return the highest-scoring (provider, tier) combination for the given
-   * taskType, based on observed performance data.
-   *
-   * Scoring formula (higher is better, max ≈ 100):
-   *   confidence  × 50  (0–50 pts) — primary driver: response quality
-   *   (1 – escalationRate) × 30    — low escalation signals consistent quality
-   *   10 – (avgLatencyMs  / 200)   — latency penalty, clamped ≥ 0
-   *   10 – (avgCostUsd × 1000)     — cost penalty, clamped ≥ 0
-   *
-   * Returns null when no data exists for the given taskType.
-   */
-  async getBestOption(taskType: TaskDomain): Promise<BestOptionResult | null> {
-    const candidates = await this.getAllStats(taskType);
-    if (candidates.length === 0) return null;
-
-    let best: BestOptionResult | null = null;
-    for (const stats of candidates) {
-      const score = this.computeScore(stats);
-      if (best === null || score > best.score) {
-        best = { stats, score };
-      }
-    }
-
-    return best;
-  }
-
   // ── Private helpers ───────────────────────────────────────────────────────
 
   private toStats(row: DbRow): PerformanceStats {
@@ -188,13 +160,6 @@ export class PerformanceStore {
     };
   }
 
-  private computeScore(stats: PerformanceStats): number {
-    const confidenceScore = stats.averageConfidence * 50;
-    const escalationScore = (1 - stats.escalationRate) * 30;
-    const latencyScore    = Math.max(0, 10 - stats.averageLatencyMs / 200);
-    const costScore       = Math.max(0, 10 - stats.averageCostUsd * 1000);
-    return confidenceScore + escalationScore + latencyScore + costScore;
-  }
 }
 
 export const performanceStore = new PerformanceStore();
