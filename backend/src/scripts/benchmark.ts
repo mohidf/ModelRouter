@@ -223,6 +223,20 @@ function sleep(ms: number): Promise<void> {
 // Main
 // ---------------------------------------------------------------------------
 
+async function checkServer(): Promise<void> {
+  try {
+    const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(3_000) });
+    if (!res.ok) throw new Error(`/health returned HTTP ${res.status}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`\n  ✗ Cannot reach backend at ${BASE_URL}`);
+    console.error(`    ${msg}`);
+    console.error('\n  Start the backend first:');
+    console.error('    cd backend && npm run dev\n');
+    process.exit(1);
+  }
+}
+
 async function runBenchmark(): Promise<void> {
   console.log('\n' + hr('═'));
   console.log('  ModelRouter Benchmark — 50 prompts');
@@ -231,6 +245,8 @@ async function runBenchmark(): Promise<void> {
   console.log(`  Estimated cost: ~$0.01–0.05  |  Estimated time: 3–6 min`);
   console.log(hr('═'));
   console.log();
+
+  await checkServer();
 
   const results: BenchmarkResult[] = [];
   const startTime = Date.now();
