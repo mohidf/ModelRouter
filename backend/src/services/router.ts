@@ -10,7 +10,7 @@ import type { ResolvedModel }          from '../providers/providerManager';
 import type { GenerateResult, CostEstimate } from '../providers/baseProvider';
 import type { WeightOverrideConfig, OptimizationMode, TaskWeights } from './strategyEngine';
 import { providerManager }             from '../providers';
-import { classifier }                  from './classifier';
+import { hybridClassifier as classifier } from './hybridClassifier';
 import { metrics }                     from './metrics';
 import { performanceStore }            from './performanceStore';
 import { strategyEngine }              from './strategyEngine';

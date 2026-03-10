@@ -8,6 +8,7 @@ import routeRouter      from './routes/route';
 import metricsRouter    from './routes/metrics';
 import performanceRouter from './routes/performance';
 import { logger } from './utils/logger';
+import { hybridClassifier } from './services/hybridClassifier';
 
 const app = express();
 
@@ -59,6 +60,12 @@ app.listen(config.port, () => {
     defaultMaxTokens: config.defaultMaxTokens,
     rateLimitPerHour: config.rateLimitPerHour,
   });
+
+  // Pre-compute anchor embeddings in the background so the first routed
+  // request does not pay initialisation latency. Failure is non-fatal —
+  // HybridClassifier falls back to rule-based on any embedding error.
+  (hybridClassifier as { warmUp?: () => Promise<void> }).warmUp?.()
+    .catch(err => logger.warn('Embedding warm-up failed (non-fatal)', { err: String(err) }));
 });
 
 export default app;
