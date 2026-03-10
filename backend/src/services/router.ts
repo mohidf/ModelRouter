@@ -71,6 +71,26 @@ interface MetricsInput {
 
 const VALID_MODES = new Set<string>(['cost', 'quality', 'balanced']);
 
+/**
+ * Parse and sanitize caller-supplied custom weights.
+ * Accepts only finite, non-negative numbers in [0, 100].
+ * Values outside that range are silently discarded so the domain
+ * defaults remain in effect — a bad weight never reaches the scorer.
+ */
+function parseCustomWeights(raw: Record<string, unknown>): Partial<TaskWeights> {
+  const result: Partial<TaskWeights> = {};
+  const keys: (keyof TaskWeights)[] = [
+    'confidenceWeight', 'costWeight', 'latencyWeight', 'escalationWeight',
+  ];
+  for (const key of keys) {
+    const val = raw[key];
+    if (typeof val === 'number' && isFinite(val) && val >= 0 && val <= 100) {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
 export class RoutingEngine {
   async route(raw: {
     prompt:            string;
@@ -90,12 +110,7 @@ export class RoutingEngine {
       overrideConfig.optimizationMode = raw.optimizationMode as OptimizationMode;
     }
     if (raw.customWeights && typeof raw.customWeights === 'object') {
-      const cw = raw.customWeights as Record<string, unknown>;
-      const parsed: Partial<TaskWeights> = {};
-      if (typeof cw.confidenceWeight === 'number') parsed.confidenceWeight = cw.confidenceWeight;
-      if (typeof cw.costWeight       === 'number') parsed.costWeight       = cw.costWeight;
-      if (typeof cw.latencyWeight    === 'number') parsed.latencyWeight    = cw.latencyWeight;
-      if (typeof cw.escalationWeight === 'number') parsed.escalationWeight = cw.escalationWeight;
+      const parsed = parseCustomWeights(raw.customWeights as Record<string, unknown>);
       if (Object.keys(parsed).length > 0) overrideConfig.customWeights = parsed;
     }
 
