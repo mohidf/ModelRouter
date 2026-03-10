@@ -3,6 +3,27 @@
  * Import this module instead of reading process.env directly in services.
  */
 
+// ---------------------------------------------------------------------------
+// Required env var validation — call once at startup before app.listen()
+// ---------------------------------------------------------------------------
+
+const REQUIRED_ENV_VARS = ['SUPABASE_URL', 'SUPABASE_ANON_KEY'] as const;
+
+/**
+ * Throws at startup if any required environment variable is absent.
+ * Call this before binding to a port so the process fails fast with a
+ * clear message rather than silently crashing on the first DB call.
+ */
+export function validateRequiredEnv(): void {
+  const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}.\n` +
+      'Copy .env.example to .env and fill in the values.',
+    );
+  }
+}
+
 const VALID_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type LogLevel = typeof VALID_LOG_LEVELS[number];
 

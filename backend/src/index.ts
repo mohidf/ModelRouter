@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { config } from './config';
+import { config, validateRequiredEnv } from './config';
 import { requestLogger } from './middleware/requestLogger';
 import { errorHandler } from './middleware/errorHandler';
 import { RateLimiter, createRateLimiterMiddleware } from './middleware/rateLimiter';
@@ -46,6 +46,9 @@ process.on('uncaughtException', (err) => {
   logger.error('Uncaught exception', { message: err.message, stack: err.stack });
   process.exit(1);
 });
+
+// --- Validate required env vars before binding ---
+validateRequiredEnv();
 
 // --- Start ---
 app.listen(config.port, () => {
