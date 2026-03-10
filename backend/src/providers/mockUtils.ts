@@ -1,18 +1,6 @@
 import type { ModelTier, TaskDomain } from './types';
 
 // ---------------------------------------------------------------------------
-// Domain inference (unchanged — used by all providers)
-// ---------------------------------------------------------------------------
-
-export function inferDomain(prompt: string): TaskDomain {
-  const lower = prompt.toLowerCase();
-  if (/\b(code|function|class|bug|refactor|implement|api|sql)\b/.test(lower))       return 'coding';
-  if (/\b(calculate|solve|equation|formula|math|integral|matrix|proof)\b/.test(lower)) return 'math';
-  if (/\b(story|poem|write|creative|imagine|fiction|lyrics)\b/.test(lower))          return 'creative';
-  return 'general';
-}
-
-// ---------------------------------------------------------------------------
 // Tier characteristics
 //
 // All simulation behaviour is driven by tier, never inferred from model name.

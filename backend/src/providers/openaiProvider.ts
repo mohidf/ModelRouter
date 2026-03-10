@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import type { IProvider, GenerateOptions, GenerateResult, CostEstimate } from './baseProvider';
 import type { ModelTier } from './types';
-import { sampleTierConfidence, getTierCostMultiplier } from './mockUtils';
 
 // ---------------------------------------------------------------------------
 // Timeout
@@ -11,7 +10,7 @@ import { sampleTierConfidence, getTierCostMultiplier } from './mockUtils';
 const TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
-// Pricing — OpenAI list prices (USD per 1 M tokens, before tier multiplier)
+// Pricing — OpenAI list prices (USD per 1 M tokens)
 // ---------------------------------------------------------------------------
 
 interface ModelPricing {
@@ -41,7 +40,9 @@ function getClient(): OpenAI {
         'Add it to your .env file or set it in the environment.',
       );
     }
-    _client = new OpenAI({ apiKey });
+    // maxRetries: the SDK handles 429 and 5xx back-off correctly,
+    // including Retry-After headers — more reliable than hand-rolled retry.
+    _client = new OpenAI({ apiKey, maxRetries: 2 });
   }
   return _client;
 }
@@ -84,8 +85,9 @@ export class OpenAIProvider implements IProvider {
         model,
         provider:        this.name,
         tier,
-        // OpenAI does not expose a per-response confidence score — simulate from tier.
-        modelConfidence: sampleTierConfidence(tier),
+        // 1.0 = request completed successfully. Errors throw and never reach here.
+        // averageConfidence in the performance store therefore tracks success rate.
+        modelConfidence: 1.0,
       };
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
@@ -106,15 +108,17 @@ export class OpenAIProvider implements IProvider {
 
   estimateCost(
     model:        string,
-    tier:         ModelTier,
+    _tier:        ModelTier,
     inputTokens:  number,
     outputTokens: number,
   ): CostEstimate {
     const { inputPer1M, outputPer1M } = PRICING[model] ?? FALLBACK_PRICING;
-    const tierMultiplier = getTierCostMultiplier(tier);
-    const inputCostUsd   = (inputTokens  * inputPer1M  / 1_000_000) * tierMultiplier;
-    const outputCostUsd  = (outputTokens * outputPer1M / 1_000_000) * tierMultiplier;
-    return { inputCostUsd, outputCostUsd, tierMultiplier, totalCostUsd: inputCostUsd + outputCostUsd };
+    // Use list pricing directly — no tier multiplier. The pricing table already
+    // reflects the actual cost difference between models (gpt-4o-mini vs gpt-4o).
+    // Applying an additional multiplier inflated costs beyond what OpenAI charges.
+    const inputCostUsd  = inputTokens  * inputPer1M  / 1_000_000;
+    const outputCostUsd = outputTokens * outputPer1M / 1_000_000;
+    return { inputCostUsd, outputCostUsd, tierMultiplier: 1, totalCostUsd: inputCostUsd + outputCostUsd };
   }
 }
 

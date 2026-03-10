@@ -43,9 +43,12 @@ export interface GenerateResult {
   /** Tier used for this call — echoed from GenerateOptions. */
   tier: ModelTier;
   /**
-   * Simulated confidence in this model's response quality (0–1).
-   * Derived from tier characteristics; premium yields higher confidence.
-   * Replace with a real model-reported score when using live APIs.
+   * Completion signal for this call (0–1). Real providers return 1.0 on
+   * success (errors throw before reaching the return statement), making
+   * averageConfidence in the performance store a proxy for success rate.
+   *
+   * If you integrate a quality-evaluation signal (e.g. a judge model or
+   * human feedback score), replace 1.0 with that value here.
    */
   modelConfidence: number;
 }
@@ -80,10 +83,8 @@ export interface IProvider {
 
   /**
    * Send a prompt to the model and return generated text plus usage data.
-   * options.tier drives latency, response depth, and modelConfidence.
-   *
-   * When swapping in real API calls, replace only this method body.
-   * The signature must remain stable.
+   * Throws on API errors, timeouts, or unrecoverable failures — never
+   * returns a partial/error result. The signature must remain stable.
    */
   generate(
     prompt: string,
