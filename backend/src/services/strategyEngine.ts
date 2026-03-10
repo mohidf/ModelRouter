@@ -3,7 +3,26 @@ import type { ResolvedModel } from '../providers/providerManager';
 import { providerManager } from '../providers';
 import { performanceStore, type PerformanceStats } from './performanceStore';
 
-const ALL_TIERS: readonly ModelTier[] = ['cheap', 'balanced', 'premium'];
+// ---------------------------------------------------------------------------
+// Normalisation bounds
+//
+// Each metric is divided by its maximum before scoring so that all inputs
+// are in [0, 1] and weights have consistent meaning regardless of unit scales.
+// Adjust these constants if real-world costs or latencies exceed these ceilings.
+// ---------------------------------------------------------------------------
+
+/** Maximum expected cost per API call in USD. Calls above this clamp to 1. */
+const MAX_COST_USD   = 0.10;
+/** Maximum expected latency in ms. Calls above this clamp to 1. */
+const MAX_LATENCY_MS = 5_000;
+
+// Tiers valid for exploration at each complexity level.
+// Prevents exploration from routing a high-complexity task to 'cheap' tier.
+const EXPLORATION_TIERS: Record<TaskComplexity, readonly ModelTier[]> = {
+  low:    ['cheap', 'balanced'],
+  medium: ['cheap', 'balanced', 'premium'],
+  high:   ['balanced', 'premium'],
+};
 
 export interface TaskWeights {
   confidenceWeight: number;
@@ -19,49 +38,67 @@ export interface WeightOverrideConfig {
   customWeights?: Partial<TaskWeights>;
 }
 
-// Default weights per task domain
+// Default weights per task domain.
+//
+// All metrics are normalised to [0, 1] before scoring (see scoreStats), so
+// these weights are directly comparable to each other — a weight of 2.0
+// means "twice as important" relative to a weight of 1.0.
 export const DEFAULT_TASK_WEIGHTS: Readonly<Record<TaskDomain, TaskWeights>> = {
   coding: {
-    confidenceWeight: 1.5,
-    costWeight:       8.0,
-    latencyWeight:    0.001,
-    escalationWeight: 1.2,
+    confidenceWeight: 2.0,  // correctness matters most
+    costWeight:       1.0,
+    latencyWeight:    0.5,
+    escalationWeight: 1.5,
   },
   math: {
-    confidenceWeight: 2.0,
-    costWeight:       8.0,
-    latencyWeight:    0.001,
+    confidenceWeight: 2.5,  // accuracy is critical; escalation strongly penalised
+    costWeight:       1.0,
+    latencyWeight:    0.5,
     escalationWeight: 2.0,
   },
   creative: {
     confidenceWeight: 1.0,
-    costWeight:       12.0,
-    latencyWeight:    0.0005,
+    costWeight:       2.0,  // cost-sensitive; creative tasks have lower correctness bar
+    latencyWeight:    0.3,
     escalationWeight: 0.8,
   },
   general: {
     confidenceWeight: 1.0,
-    costWeight:       10.0,
-    latencyWeight:    0.001,
+    costWeight:       1.5,
+    latencyWeight:    1.0,
     escalationWeight: 1.0,
   },
 };
 
-// Presets applied when a per-request optimizationMode is set
+// Presets applied when a per-request optimizationMode is set.
+// Override specific weights — unspecified weights stay at the domain default.
 const OPTIMIZATION_PRESETS: Record<Exclude<OptimizationMode, 'balanced'>, Partial<TaskWeights>> = {
   cost: {
-    confidenceWeight: 0.8,
-    costWeight:       20.0,
-    latencyWeight:    0.0005,
-    escalationWeight: 0.8,
+    costWeight:       5.0,   // cost dominates
+    confidenceWeight: 0.5,
+    escalationWeight: 0.5,
   },
   quality: {
-    confidenceWeight: 2.0,
-    costWeight:       5.0,
-    latencyWeight:    0.001,
-    escalationWeight: 2.0,
+    confidenceWeight: 4.0,   // confidence and low escalation dominate
+    escalationWeight: 3.0,
+    costWeight:       0.3,
   },
 };
+
+// ---------------------------------------------------------------------------
+// Weight validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Clamp a weight value to a safe range [0, 100].
+ * Rejects non-finite values (NaN, Infinity) from request-supplied customWeights.
+ * Falls back to the provided default so a bad user-supplied weight never
+ * inverts the scoring function.
+ */
+function clampWeight(value: number, defaultValue: number): number {
+  if (!isFinite(value) || value < 0) return defaultValue;
+  return Math.min(value, 100);
+}
 
 // Format: CODE_WEIGHTS=confidence:2.0,cost:0.5,latency:0.2,escalation:1.0
 function parseWeightsEnv(envVar: string | undefined): Partial<TaskWeights> | null {
@@ -126,7 +163,15 @@ export class StrategyEngine {
     }
 
     if (override?.customWeights) {
-      weights = { ...weights, ...override.customWeights };
+      const cw = override.customWeights;
+      // Clamp each supplied weight — negative or non-finite values would invert
+      // the scoring function and produce undefined routing behaviour.
+      weights = {
+        confidenceWeight: cw.confidenceWeight !== undefined ? clampWeight(cw.confidenceWeight, weights.confidenceWeight) : weights.confidenceWeight,
+        costWeight:       cw.costWeight       !== undefined ? clampWeight(cw.costWeight,       weights.costWeight)       : weights.costWeight,
+        latencyWeight:    cw.latencyWeight    !== undefined ? clampWeight(cw.latencyWeight,    weights.latencyWeight)    : weights.latencyWeight,
+        escalationWeight: cw.escalationWeight !== undefined ? clampWeight(cw.escalationWeight, weights.escalationWeight) : weights.escalationWeight,
+      };
     }
 
     return weights;
@@ -156,7 +201,7 @@ export class StrategyEngine {
       .sort((a, b) => b.score - a.score);
 
     if (Math.random() < this.epsilon) {
-      return { ...this.exploreRandom(taskType), rankedOptions };
+      return { ...this.exploreRandom(taskType, complexity), rankedOptions };
     }
 
     return { ...this.exploit(candidates, weights), rankedOptions };
@@ -173,12 +218,16 @@ export class StrategyEngine {
       .sort((a, b) => b.score - a.score);
   }
 
-  private exploreRandom(taskType: TaskDomain): Omit<StrategyDecision, 'rankedOptions'> {
+  private exploreRandom(taskType: TaskDomain, complexity: TaskComplexity): Omit<StrategyDecision, 'rankedOptions'> {
     const providers = providerManager.listProviders();
+    // Constrain exploration to tiers appropriate for the task complexity.
+    // Without this, a high-complexity prompt could be routed to 'cheap' tier
+    // during exploration, giving the user a degraded response.
+    const validTiers = EXPLORATION_TIERS[complexity];
 
     const pool: { providerName: string; tier: ModelTier }[] = [];
     for (const p of providers) {
-      for (const tier of ALL_TIERS) {
+      for (const tier of validTiers) {
         pool.push({ providerName: p.name, tier });
       }
     }
@@ -220,10 +269,17 @@ export class StrategyEngine {
   }
 
   private scoreStats(stats: PerformanceStats, weights: TaskWeights): number {
+    // Each metric is normalised to [0, 1] before applying weights so that
+    // weights are dimensionless and directly comparable to one another.
+    // Without normalisation, raw unit differences (ms vs USD vs fraction)
+    // make the weight magnitudes meaningless and fragile to scale changes.
+    const normCost    = Math.min(stats.averageCostUsd   / MAX_COST_USD,    1);
+    const normLatency = Math.min(stats.averageLatencyMs / MAX_LATENCY_MS,  1);
+    // averageConfidence and escalationRate are already in [0, 1].
     return (
         weights.confidenceWeight * stats.averageConfidence
-      - weights.costWeight       * stats.averageCostUsd
-      - weights.latencyWeight    * stats.averageLatencyMs
+      - weights.costWeight       * normCost
+      - weights.latencyWeight    * normLatency
       - weights.escalationWeight * stats.escalationRate
     );
   }
