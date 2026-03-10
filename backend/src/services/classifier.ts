@@ -1,5 +1,4 @@
 import type { ClassificationResult, TaskComplexity, TaskDomain } from '../providers/types';
-import { jitterConfidence } from '../providers/mockUtils';
 
 // ---------------------------------------------------------------------------
 // Public interface — swap this implementation for an LLM-based one by
@@ -74,11 +73,7 @@ export class RuleBasedClassifier implements IClassifier {
     const complexity = this.scoreComplexity(prompt);
     const estimatedTokens = Math.ceil(prompt.length / 4);
 
-    // Add small noise to simulate non-deterministic ML classifier behaviour.
-    // Remove this line when swapping in a real model.
-    const simulatedConfidence = jitterConfidence(confidence);
-
-    return { domain, complexity, confidence: simulatedConfidence, estimatedTokens };
+    return { domain, complexity, confidence, estimatedTokens };
   }
 
   private scoreDomain(prompt: string): { domain: TaskDomain; confidence: number } {
