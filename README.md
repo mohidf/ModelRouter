@@ -6,8 +6,9 @@ A self-optimizing AI model router that dynamically selects the best LLM provider
 
 ## Features
 
+- **Hybrid classifier** — two-stage pipeline: fast keyword matching (0 ms) for clear prompts, semantic embedding search (OpenAI `text-embedding-3-small`) for ambiguous ones. Falls back to rule-based if the embedding API is unavailable.
 - **Multi-provider routing** — OpenAI and Anthropic, with a clean interface for adding more
-- **Task classification** — automatically classifies prompts as coding, math, creative, or general
+- **Task classification** — classifies prompts as coding, math, creative, or general using both syntax signals and semantic similarity
 - **Strategy engine** — scores every known model using weighted confidence, cost, latency, and escalation metrics
 - **Adaptive learning** — exponential moving averages (EMA) update per-model performance stats after every call
 - **Epsilon-greedy exploration** — occasionally routes to less-used models to discover better options
@@ -21,7 +22,11 @@ A self-optimizing AI model router that dynamically selects the best LLM provider
 ```
 User Prompt
      ↓
- Classifier          (domain + complexity + confidence)
+HybridClassifier
+  ├─ Stage 1: RuleBasedClassifier   (keyword signals, ~0 ms, free)
+  │       confidence ≥ 0.80 → return immediately (fast path)
+  └─ Stage 2: EmbeddingClassifier   (cosine similarity vs anchors, ~150 ms)
+          anchor vectors pre-loaded at startup from OpenAI embeddings API
      ↓
 Strategy Engine      (score every known provider/tier, pick best)
      ↓
@@ -132,12 +137,14 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ### Backend (`/backend`)
 
-| Script          | Description                                 |
-|-----------------|---------------------------------------------|
-| `npm run dev`   | Start with nodemon + ts-node (hot reload)   |
-| `npm run build` | Compile TypeScript to `dist/`               |
-| `npm start`     | Run compiled `dist/index.js`                |
-| `npm run test:db` | Verify Supabase connection                |
+| Script               | Description                                 |
+|----------------------|---------------------------------------------|
+| `npm run dev`        | Start with nodemon + ts-node (hot reload)   |
+| `npm run build`      | Compile TypeScript to `dist/`               |
+| `npm start`          | Run compiled `dist/index.js`                |
+| `npm test`           | Run Jest unit test suite                    |
+| `npm run test:coverage` | Unit tests with coverage report          |
+| `npm run test:db`    | Verify Supabase connection                  |
 
 ### Frontend (`/frontend`)
 
@@ -161,7 +168,10 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 The router runs a three-stage pipeline on every request:
 
-1. **Classify** — a keyword and pattern-based classifier assigns the prompt a `domain` (coding/math/creative/general) and `complexity` (low/medium/high) with a confidence score.
+1. **Classify** — a two-stage hybrid classifier assigns the prompt a `domain` (coding/math/creative/general) and `complexity` (low/medium/high) with a confidence score.
+   - **Fast path**: keyword and regex signals score the prompt in ~0 ms. If one domain clearly dominates (confidence ≥ 0.80), the result is used immediately.
+   - **Slow path**: for ambiguous prompts, OpenAI's `text-embedding-3-small` embeds the prompt and compares it against 28 pre-computed anchor vectors (7 per domain). The domain with the highest mean cosine similarity wins. Anchor vectors are pre-loaded at startup so only the live prompt pays the API latency (~150 ms).
+   - **Fallback**: if the embedding API is unreachable, the rule-based result is used and a warning is logged. Routing never fails due to classifier infrastructure.
 
 2. **Route** — the strategy engine scores every (provider, tier) combination it has seen before, using a weighted formula:
    ```
