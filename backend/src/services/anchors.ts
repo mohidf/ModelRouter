@@ -3,7 +3,7 @@ import type { TaskDomain } from '../providers/types';
 // ---------------------------------------------------------------------------
 // Domain anchor prompts
 //
-// Each anchor set contains 7 diverse examples that clearly represent that
+// Each anchor set contains 7–11 diverse examples that clearly represent that
 // domain. Diversity matters: anchors that are too similar to each other
 // cluster in embedding space and fail to cover the full domain surface.
 //
@@ -34,6 +34,10 @@ export const DOMAIN_ANCHORS: readonly DomainAnchors[] = [
       'What is the time complexity of quicksort and how does it compare to mergesort',
       'Set up a PostgreSQL database schema with foreign keys for a multi-tenant SaaS application',
       'Write a React hook that fetches data from an API and handles loading and error states',
+      // Added after benchmark: "subroutine/fault" and "closures/variable" prompts
+      // drifted toward math. These anchors pull them back to coding.
+      'There is a bug in my subroutine that produces incorrect output on certain inputs',
+      'Why does my variable inside a loop capture the wrong value when I access it later',
     ],
   },
   {
@@ -70,6 +74,13 @@ export const DOMAIN_ANCHORS: readonly DomainAnchors[] = [
       'Summarize the plot of George Orwell\'s 1984',
       'What are some healthy breakfast options that are quick to prepare in the morning',
       'Who was Ada Lovelace and why is she historically significant',
+      // Added after benchmark: nature/science questions drifted to creative,
+      // health/lifestyle questions drifted to creative, leadership drifted to creative.
+      // These anchors cover factual questions that use descriptive or qualitative language.
+      'Why do trees change color and lose their leaves in the autumn season',
+      'What lifestyle changes help someone manage their weight in a sustainable way',
+      'What qualities make a person an effective leader when their team is under pressure',
+      'How does the global economy affect the prices consumers pay for everyday goods',
     ],
   },
 ] as const;
