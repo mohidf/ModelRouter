@@ -12,7 +12,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:db": "ts-node src/scripts/testConnection.ts",
-    "benchmark": "ts-node src/scripts/benchmark.ts"
+    "benchmark": "ts-node src/scripts/benchmark.ts",
+    "reset:stats": "ts-node src/scripts/resetStats.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

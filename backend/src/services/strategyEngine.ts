@@ -46,25 +46,25 @@ export interface WeightOverrideConfig {
 export const DEFAULT_TASK_WEIGHTS: Readonly<Record<TaskDomain, TaskWeights>> = {
   coding: {
     confidenceWeight: 2.0,  // correctness matters most
-    costWeight:       1.0,
+    costWeight:       2.5,  // raised: providers return equal confidence, so cost must differentiate
     latencyWeight:    0.5,
     escalationWeight: 1.5,
   },
   math: {
     confidenceWeight: 2.5,  // accuracy is critical; escalation strongly penalised
-    costWeight:       1.0,
+    costWeight:       2.5,  // raised: prevents premium lock-in when cheaper models succeed equally
     latencyWeight:    0.5,
     escalationWeight: 2.0,
   },
   creative: {
     confidenceWeight: 1.0,
-    costWeight:       2.0,  // cost-sensitive; creative tasks have lower correctness bar
+    costWeight:       3.0,  // raised: creative tasks have lowest correctness bar, most cost-sensitive
     latencyWeight:    0.3,
     escalationWeight: 0.8,
   },
   general: {
     confidenceWeight: 1.0,
-    costWeight:       1.5,
+    costWeight:       2.5,  // raised: general queries should use cheapest adequate model
     latencyWeight:    1.0,
     escalationWeight: 1.0,
   },

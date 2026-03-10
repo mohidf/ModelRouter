@@ -19,11 +19,20 @@ import type { TaskDomain, TaskComplexity, ModelTier } from './types';
 // Complexity → tier mapping
 // ---------------------------------------------------------------------------
 
-/** Maps task complexity (classifier output) to provider tier (capability level). */
+/**
+ * Maps task complexity (classifier output) to provider tier (capability level).
+ *
+ * High complexity maps to `balanced` (not `premium`) so the strategy engine
+ * accumulates data for balanced-tier models on first encounters. If classifier
+ * confidence falls below `CONFIDENCE_THRESHOLD`, the escalation path promotes
+ * to premium automatically. This prevents the cold-start problem where every
+ * domain seeds only premium data, causing the strategy engine to exploit
+ * premium indefinitely before cheaper tiers are discovered.
+ */
 const COMPLEXITY_TO_TIER: Record<TaskComplexity, ModelTier> = {
   low:    'cheap',
   medium: 'balanced',
-  high:   'premium',
+  high:   'balanced',  // escalation promotes to premium when confidence is low
 };
 
 function complexityToTier(complexity: TaskComplexity): ModelTier {

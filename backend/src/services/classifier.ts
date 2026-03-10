@@ -42,6 +42,7 @@ const DOMAIN_SIGNALS: Record<SpecificDomain, Signal[]> = {
     { pattern: /\d+\s*[+\-*\/^]\s*\d+|[a-z]\s*=\s*[\d(]/i,                                  weight: 3 },
     { pattern: /\b(sum|product|factorial|prime|modulo|logarithm|exponent|coefficient)\b/i,    weight: 3 },
     { pattern: /\b(mean|median|variance|standard deviation|correlation|regression)\b/i,       weight: 3 },
+    { pattern: /\b(gradient|steepest.descent|directional.derivative|jacobian|hessian|saddle.point)\b/i, weight: 4 },
   ],
   creative: [
     { pattern: /\b(write|compose|craft|draft|create)\b.*\b(story|poem|essay|song|script|letter)\b/i, weight: 5 },

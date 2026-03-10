@@ -81,6 +81,10 @@ export const DOMAIN_ANCHORS: readonly DomainAnchors[] = [
       'What lifestyle changes help someone manage their weight in a sustainable way',
       'What qualities make a person an effective leader when their team is under pressure',
       'How does the global economy affect the prices consumers pay for everyday goods',
+      // Added after benchmark round 2: biographical/historical questions drifted to creative,
+      // ML/AI conceptual questions drifted to math.
+      'Who was Marie Curie and what scientific discoveries made her historically important',
+      'How do neural networks learn to recognize patterns and what happens during model training',
     ],
   },
 ] as const;
