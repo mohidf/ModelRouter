@@ -1,132 +1,161 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { InsightsResponse, TaskInsight, ScoredStats, ModelTier, TaskDomain } from '../types';
 
-// ---------------------------------------------------------------------------
-// Label maps
-// ---------------------------------------------------------------------------
-
-const TIER_LABELS: Record<ModelTier, string> = {
-  cheap: 'Cheap', balanced: 'Balanced', premium: 'Premium',
+const TIER_COLOR: Record<ModelTier, string> = {
+  cheap: '#00ff88', balanced: '#00d4ff', premium: '#f59e0b',
 };
 
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: 'OpenAI', anthropic: 'Anthropic',
-};
-
-const DOMAIN_LABELS: Record<TaskDomain, string> = {
-  coding: 'Coding', math: 'Math', creative: 'Creative', general: 'General',
+const DOMAIN_META: Record<TaskDomain, { icon: string; color: string; label: string }> = {
+  coding:   { icon: '{ }', color: '#00d4ff', label: 'Coding'   },
+  math:     { icon: '∑',   color: '#a78bfa', label: 'Math'     },
+  creative: { icon: '✦',   color: '#f472b6', label: 'Creative' },
+  general:  { icon: '◎',   color: '#34d399', label: 'General'  },
 };
 
 const DOMAINS: TaskDomain[] = ['coding', 'math', 'creative', 'general'];
 
-// ---------------------------------------------------------------------------
-// Badges
-// ---------------------------------------------------------------------------
+// ── Score bar ──────────────────────────────────────────────────────────────
 
-function ProviderBadge({ provider }: { provider: string }) {
+function ScoreBar({ score, maxScore = 3.0, chosen }: { score: number | null; maxScore?: number; chosen: boolean }) {
+  const pct = score != null ? Math.min(Math.max(score / maxScore, 0), 1) * 100 : 0;
   return (
-    <span className="inline-flex items-center bg-[#303030] text-[#b4b4b4] border border-[#3f3f3f] text-xs font-medium px-1.5 py-0.5 rounded">
-      {PROVIDER_LABELS[provider] ?? provider}
-    </span>
-  );
-}
-
-function TierBadge({ tier }: { tier: ModelTier }) {
-  return (
-    <span className="inline-flex items-center bg-emerald-900/40 text-emerald-400 border border-emerald-800/60 text-xs font-medium px-1.5 py-0.5 rounded">
-      {TIER_LABELS[tier]}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Option row — compact single-line format
-// ---------------------------------------------------------------------------
-
-function OptionRow({ stats, isWinner }: { stats: ScoredStats; isWinner: boolean }) {
-  return (
-    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg ${
-      isWinner ? 'bg-emerald-900/20 border border-emerald-800/60' : 'hover:bg-[#303030] transition-colors'
-    }`}>
-      <span className={`text-sm w-4 text-center shrink-0 select-none ${isWinner ? 'text-emerald-400' : 'text-transparent'}`}>
-        ⭐
-      </span>
-      <ProviderBadge provider={stats.provider} />
-      <TierBadge tier={stats.tier} />
-      <span className="flex-1 text-xs text-[#8e8e8e] tabular-nums">
-        {(stats.averageConfidence * 100).toFixed(0)}% conf
-        <span className="text-[#3f3f3f] mx-1">·</span>
-        {Math.round(stats.averageLatencyMs)} ms
-        <span className="text-[#3f3f3f] mx-1">·</span>
-        <span className="font-mono">${stats.averageCostUsd.toFixed(6)}</span>
-        <span className="text-[#3f3f3f] mx-1">·</span>
-        {(stats.escalationRate * 100).toFixed(0)}% esc
-      </span>
-      <span className={`text-xs font-mono font-semibold shrink-0 ${isWinner ? 'text-emerald-400' : 'text-[#8e8e8e]'}`}>
-        {stats.score != null ? stats.score.toFixed(3) : '—'}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'var(--rim)', overflow: 'hidden' }}>
+        <div style={{
+          width: `${pct}%`, height: '100%', borderRadius: 2,
+          background: chosen ? 'var(--accent)' : 'var(--muted)',
+          transition: 'width 0.5s ease',
+        }} />
+      </div>
+      <span style={{
+        fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
+        color: chosen ? 'var(--accent)' : 'var(--muted)',
+        minWidth: 32, textAlign: 'right',
+      }}>
+        {score != null ? score.toFixed(2) : '—'}
       </span>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Domain card
-// ---------------------------------------------------------------------------
+// ── Option row ─────────────────────────────────────────────────────────────
+
+function OptionRow({ stats, isWinner }: { stats: ScoredStats; isWinner: boolean }) {
+  const tierColor = TIER_COLOR[stats.tier];
+  return (
+    <div style={{
+      padding: '8px 12px',
+      borderRadius: 7,
+      background: isWinner ? 'rgba(0,212,255,0.04)' : 'transparent',
+      border: `1px solid ${isWinner ? 'rgba(0,212,255,0.15)' : 'transparent'}`,
+      display: 'flex', flexDirection: 'column', gap: 5,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {isWinner && <span style={{ fontSize: 9, color: 'var(--accent)', fontFamily: "'IBM Plex Mono', monospace" }}>▶</span>}
+          <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: isWinner ? '#f0f0f0' : '#9ca3af' }}>
+            {stats.provider}
+          </span>
+          <span style={{
+            fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500,
+            color: tierColor, background: `${tierColor}14`,
+            border: `1px solid ${tierColor}33`,
+            borderRadius: 3, padding: '1px 5px',
+          }}>
+            {stats.tier}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {[
+            { label: 'conf', value: `${(stats.averageConfidence * 100).toFixed(0)}%` },
+            { label: 'lat',  value: `${Math.round(stats.averageLatencyMs)}ms` },
+            { label: 'cost', value: `$${stats.averageCostUsd.toFixed(4)}` },
+            { label: 'esc',  value: `${(stats.escalationRate * 100).toFixed(0)}%` },
+          ].map(({ label, value }) => (
+            <div key={label} style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
+              <div style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)' }}>{value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <ScoreBar score={stats.score} chosen={isWinner} />
+    </div>
+  );
+}
+
+// ── Domain card ─────────────────────────────────────────────────────────────
 
 function DomainCard({ insight, domain }: { insight: TaskInsight; domain: TaskDomain }) {
-  const [showOthers, setShowOthers] = useState(false);
-  const totalRequests = insight.all.reduce((sum, s) => sum + s.totalRequests, 0);
+  const [showAll, setShowAll] = useState(false);
+  const meta = DOMAIN_META[domain];
+  const totalRequests = insight.all.reduce((s, x) => s + x.totalRequests, 0);
   const others = insight.all.slice(1);
 
   return (
-    <div className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl overflow-hidden">
+    <div style={{
+      background: 'var(--surface)',
+      border: '1px solid var(--rim)',
+      borderRadius: 10, overflow: 'hidden',
+    }}>
       {/* Card header */}
-      <div className="px-5 py-4 border-b border-[#3f3f3f] flex items-center justify-between">
-        <span className="text-sm font-semibold text-[#ececec]">{DOMAIN_LABELS[domain]}</span>
-        <span className="text-xs text-[#8e8e8e] tabular-nums">
-          {totalRequests} {totalRequests === 1 ? 'request' : 'requests'}
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--rim)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: 'rgba(255,255,255,0.015)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 14, color: meta.color,
+            width: 24, height: 24,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: `${meta.color}14`,
+            border: `1px solid ${meta.color}33`,
+            borderRadius: 6,
+            fontFamily: "'IBM Plex Mono', monospace",
+          }}>
+            {meta.icon}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 500, color: '#f0f0f0' }}>{meta.label}</span>
+        </div>
+        <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)' }}>
+          {totalRequests} req
         </span>
       </div>
 
       {!insight.best ? (
-        <div className="px-5 py-8 flex items-center justify-center">
-          <p className="text-xs text-[#8e8e8e]">No routing decisions recorded yet.</p>
+        <div style={{ padding: '28px 16px', textAlign: 'center' }}>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0, fontFamily: "'IBM Plex Mono', monospace" }}>
+            no data yet
+          </p>
         </div>
       ) : (
-        <div className="px-3 py-3 flex flex-col gap-1">
-          {/* Best option — always shown, highlighted */}
+        <div style={{ padding: '8px' }}>
           <OptionRow stats={insight.all[0]} isWinner />
 
-          {/* Score label under best */}
-          <p className="text-[11px] text-[#8e8e8e] px-3">
-            Score: <span className="font-mono text-emerald-400">{insight.best.score != null ? insight.best.score.toFixed(3) : '—'}</span>
-          </p>
-
-          {/* Other options — collapsible */}
           {others.length > 0 && (
-            <div className="mt-1">
+            <>
               <button
                 type="button"
-                onClick={() => setShowOthers((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1 text-[11px] text-[#8e8e8e] hover:text-[#b4b4b4] transition-colors"
+                onClick={() => setShowAll(v => !v)}
+                style={{
+                  width: '100%', padding: '5px 12px', marginTop: 3,
+                  fontSize: 10, fontFamily: "'IBM Plex Mono', monospace",
+                  color: 'var(--muted)', background: 'none', border: 'none',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                  borderRadius: 6,
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
               >
-                <svg
-                  className={`w-2.5 h-2.5 transition-transform shrink-0 ${showOthers ? 'rotate-90' : ''}`}
-                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-                Other Options ({others.length})
+                <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: showAll ? 'rotate(90deg)' : 'none' }}>▶</span>
+                {showAll ? 'hide' : `+${others.length} more`}
               </button>
-
-              {showOthers && (
-                <div className="flex flex-col gap-0.5 mt-0.5">
-                  {others.map((s) => (
-                    <OptionRow key={`${s.provider}:${s.tier}`} stats={s} isWinner={false} />
-                  ))}
-                </div>
-              )}
-            </div>
+              {showAll && others.map(s => (
+                <OptionRow key={`${s.provider}:${s.tier}`} stats={s} isWinner={false} />
+              ))}
+            </>
           )}
         </div>
       )}
@@ -134,14 +163,12 @@ function DomainCard({ insight, domain }: { insight: TaskInsight; domain: TaskDom
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main panel
-// ---------------------------------------------------------------------------
+// ── Main ────────────────────────────────────────────────────────────────────
 
 export default function InsightsPanel() {
   const [insights, setInsights] = useState<InsightsResponse | null>(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -149,89 +176,102 @@ export default function InsightsPanel() {
     try {
       const res  = await fetch('/api/performance');
       const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? 'Failed to load insights.');
-      } else {
-        setInsights(data as InsightsResponse);
-      }
-    } catch {
-      setError('Could not reach the backend.');
-    } finally {
-      setLoading(false);
-    }
+      if (!res.ok) { setError(data.error ?? 'Failed.'); }
+      else { setInsights(data as InsightsResponse); }
+    } catch { setError('Could not reach the backend.'); }
+    finally  { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
+  const totalDecisions = insights
+    ? DOMAINS.reduce((s, d) => s + insights.byTaskType[d].all.reduce((x, y) => x + y.totalRequests, 0), 0)
+    : 0;
+
   return (
-    <div className="flex flex-col gap-6">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h2 className="text-sm font-semibold text-[#ececec] tracking-tight">Optimization Insights</h2>
-          <p className="text-xs text-[#8e8e8e] mt-0.5">
-            Best provider + tier per task type, ranked by strategy score.
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', color: '#f0f0f0' }}>
+            Optimization Insights
+          </h2>
+          <p style={{ margin: '3px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
+            Best provider + tier per task type, ranked by EMA score
           </p>
         </div>
         <button
           onClick={() => void load()}
           disabled={loading}
-          className="flex items-center gap-1.5 text-xs font-medium text-[#8e8e8e] hover:text-[#ececec] border border-[#3f3f3f] rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40 bg-[#2f2f2f]"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '6px 12px', fontSize: 11,
+            fontFamily: "'IBM Plex Mono', monospace",
+            color: 'var(--muted)', background: 'var(--surface)',
+            border: '1px solid var(--rim)',
+            borderRadius: 7, cursor: 'pointer',
+            opacity: loading ? 0.5 : 1,
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--rim-hi)'; (e.currentTarget as HTMLElement).style.color = '#f0f0f0'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--rim)'; (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
         >
-          <svg
-            className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`}
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-          >
+          <svg className={loading ? 'anim-spin' : ''} width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          Refresh
+          refresh
         </button>
       </div>
 
       {error && (
-        <div className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl px-4 py-3">
-          <p className="text-sm text-red-400">{error}</p>
-        </div>
+        <div style={{
+          padding: '10px 14px', fontSize: 12,
+          fontFamily: "'IBM Plex Mono', monospace",
+          color: 'var(--red)', background: 'var(--red-bg)',
+          border: '1px solid rgba(255,68,102,0.2)', borderRadius: 8,
+        }}>{error}</div>
       )}
 
+      {/* Skeleton */}
       {loading && !insights && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {DOMAINS.map(d => (
-            <div key={d} className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl p-5 h-40 animate-pulse" />
-          ))}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {DOMAINS.map(d => <div key={d} className="skeleton" style={{ height: 150, borderRadius: 10 }} />)}
         </div>
       )}
 
       {!loading && insights && (
         <>
-          {/* Global stats */}
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="inline-flex items-center gap-2 bg-[#2f2f2f] border border-[#3f3f3f] rounded-lg px-3 py-2">
-              <span className="text-xs text-[#8e8e8e] font-medium">Exploration rate</span>
-              <span className="font-mono text-sm font-semibold text-[#ececec]">
-                ε = {(insights.epsilon * 100).toFixed(0)}%
-              </span>
-            </div>
-            <div className="inline-flex items-center gap-2 bg-[#2f2f2f] border border-[#3f3f3f] rounded-lg px-3 py-2">
-              <span className="text-xs text-[#8e8e8e] font-medium">Total decisions</span>
-              <span className="font-mono text-sm font-semibold text-[#ececec]">
-                {DOMAINS.reduce(
-                  (sum, d) => sum + insights.byTaskType[d].all.reduce((s, x) => s + x.totalRequests, 0),
-                  0,
-                )}
-              </span>
-            </div>
+          {/* Global stats pills */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <StatPill label="ε exploration" value={`${(insights.epsilon * 100).toFixed(0)}%`} />
+            <StatPill label="total decisions" value={String(totalDecisions)} />
           </div>
 
-          {/* Domain cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Domain grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {DOMAINS.map(domain => (
               <DomainCard key={domain} domain={domain} insight={insights.byTaskType[domain]} />
             ))}
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function StatPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 8,
+      padding: '6px 12px',
+      background: 'var(--surface)', border: '1px solid var(--rim)', borderRadius: 8,
+    }}>
+      <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', letterSpacing: '0.05em' }}>
+        {label}
+      </span>
+      <span style={{ fontSize: 13, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: '#f0f0f0' }}>
+        {value}
+      </span>
     </div>
   );
 }

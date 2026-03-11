@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -10,143 +10,197 @@ interface Props {
   loading: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Label maps
-// ---------------------------------------------------------------------------
+const DOMAIN_COLOR: Record<TaskDomain, string> = {
+  coding: '#00d4ff', math: '#a78bfa', creative: '#f472b6', general: '#34d399',
+};
 
-const DOMAIN_LABELS: Record<TaskDomain, string> = {
-  coding: 'Coding', math: 'Math', creative: 'Creative', general: 'General',
+const TIER_COLOR: Record<ModelTier, string> = {
+  cheap: 'var(--green)', balanced: 'var(--accent)', premium: 'var(--amber)',
 };
 
 const COMPLEXITY_LABELS: Record<TaskComplexity, string> = {
-  low: 'Low', medium: 'Medium', high: 'High',
+  low: 'low', medium: 'med', high: 'high',
 };
 
-const TIER_LABELS: Record<ModelTier, string> = {
-  cheap: 'Cheap', balanced: 'Balanced', premium: 'Premium',
-};
+function mono(s: string) {
+  return <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{s}</span>;
+}
 
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: 'OpenAI', anthropic: 'Anthropic',
-};
+// ── Shared micro-badge ──────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Badges
-// ---------------------------------------------------------------------------
-
-function ProviderBadge({ provider }: { provider: string }) {
+function Chip({ label, color, bg }: { label: string; color: string; bg: string }) {
   return (
-    <span className="inline-flex items-center bg-[#303030] text-[#b4b4b4] border border-[#3f3f3f] text-xs font-medium px-1.5 py-0.5 rounded">
-      {PROVIDER_LABELS[provider] ?? provider}
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500,
+      color, backgroundColor: bg,
+      border: `1px solid ${color}33`,
+      borderRadius: 4, padding: '1px 6px',
+      letterSpacing: '0.03em',
+    }}>
+      {label}
     </span>
   );
 }
 
-function TierBadge({ tier }: { tier: ModelTier }) {
-  return (
-    <span className="inline-flex items-center bg-emerald-900/40 text-emerald-400 border border-emerald-800/60 text-xs font-medium px-1.5 py-0.5 rounded">
-      {TIER_LABELS[tier]}
-    </span>
-  );
+function TierChip({ tier }: { tier: ModelTier }) {
+  const c = TIER_COLOR[tier];
+  return <Chip label={tier} color={c} bg={`${c}14`} />;
 }
 
-function EscalatedBadge() {
-  return (
-    <span className="inline-flex items-center bg-red-900/40 text-red-400 border border-red-800/60 text-xs font-medium px-1.5 py-0.5 rounded">
-      escalated
-    </span>
-  );
+function DomainChip({ domain }: { domain: TaskDomain }) {
+  const c = DOMAIN_COLOR[domain];
+  return <Chip label={domain} color={c} bg={`${c}14`} />;
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline building blocks
-// ---------------------------------------------------------------------------
+// ── Pipeline strip ──────────────────────────────────────────────────────────
 
-function PipelineStage({ label, children }: { label: string; children: ReactNode }) {
+function PipelineStep({
+  index, title, children, delay = 0,
+}: {
+  index: number; title: string; children: React.ReactNode; delay?: number;
+}) {
   return (
-    <div className="bg-[#303030] border border-[#3f3f3f] rounded-xl px-4 py-3">
-      <p className="text-[11px] text-[#8e8e8e] uppercase tracking-wide font-medium mb-1.5">{label}</p>
-      {children}
-    </div>
-  );
-}
-
-function Arrow() {
-  return (
-    <div className="flex justify-center py-1">
-      <div className="flex flex-col items-center gap-0.5">
-        <div className="w-px h-3 bg-[#3f3f3f]" />
-        <svg className="w-3 h-3 text-[#3f3f3f]" fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-        </svg>
+    <div className="anim-fade-up" style={{
+      animationDelay: `${delay}ms`,
+      flex: 1, minWidth: 0,
+      background: 'var(--surface-2)',
+      border: '1px solid var(--rim)',
+      borderRadius: 8,
+      padding: '10px 12px',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+        <span style={{
+          width: 16, height: 16, borderRadius: 4,
+          background: 'var(--accent-bg)',
+          border: '1px solid rgba(0,212,255,0.2)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
+          color: 'var(--accent)', fontWeight: 600, flexShrink: 0,
+        }}>
+          {String(index).padStart(2, '0')}
+        </span>
+        <span style={{
+          fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
+          color: 'var(--muted)', letterSpacing: '0.1em', textTransform: 'uppercase',
+        }}>
+          {title}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {children}
       </div>
     </div>
   );
 }
 
-function StrategyModeBadge({ mode }: { mode: 'fallback' | 'exploration' | 'exploitation' }) {
-  const styles: Record<string, string> = {
-    exploitation: 'bg-emerald-900/40 text-emerald-400 border-emerald-800/60',
-    exploration:  'bg-amber-900/40 text-amber-400 border-amber-800/60',
-    fallback:     'bg-[#303030] text-[#8e8e8e] border-[#3f3f3f]',
-  };
-  const labels: Record<string, string> = {
-    exploitation: 'Exploitation — highest scored option',
-    exploration:  'Exploration (ε) — random selection',
-    fallback:     'Fallback — no historical data',
-  };
+function PipelineRow({ label, value, accent }: { label: string; value: React.ReactNode; accent?: boolean }) {
   return (
-    <span className={`inline-flex items-center text-xs font-medium px-1.5 py-0.5 rounded border ${styles[mode]}`}>
-      {labels[mode]}
-    </span>
-  );
-}
-
-function OptionRow({ option, isChosen }: { option: EvaluatedOption; isChosen: boolean }) {
-  return (
-    <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors ${
-      isChosen ? 'bg-emerald-900/20 border border-emerald-800/60' : 'hover:bg-[#2f2f2f]'
-    }`}>
-      {/* Star */}
-      <span className={`text-sm w-4 text-center shrink-0 select-none ${isChosen ? 'text-emerald-400' : 'text-transparent'}`}>
-        ⭐
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 }}>
+        {label}
       </span>
-
-      <ProviderBadge provider={option.provider} />
-      <TierBadge tier={option.tier} />
-
-      {/* Metrics */}
-      <span className="flex-1 flex items-center gap-2 text-xs text-[#8e8e8e] tabular-nums flex-wrap">
-        <span title="Avg confidence">{(option.averageConfidence * 100).toFixed(0)}% conf</span>
-        <span className="text-[#3f3f3f]">·</span>
-        <span title="Avg latency">{Math.round(option.averageLatencyMs)} ms</span>
-        <span className="text-[#3f3f3f]">·</span>
-        <span className="font-mono" title="Avg cost per call">${option.averageCostUsd.toFixed(6)}</span>
-        <span className="text-[#3f3f3f]">·</span>
-        <span title="Escalation rate">{(option.escalationRate * 100).toFixed(0)}% esc</span>
-      </span>
-
-      {/* Score */}
-      <span className={`text-xs font-mono font-semibold shrink-0 ${isChosen ? 'text-emerald-400' : 'text-[#8e8e8e]'}`}>
-        {option.score.toFixed(3)}
+      <span style={{
+        fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500,
+        color: accent ? 'var(--accent)' : '#e0e0e8',
+        textAlign: 'right', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {value}
       </span>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
+// ── Evaluated options table ─────────────────────────────────────────────────
+
+function OptionRow({ opt, chosen }: { opt: EvaluatedOption; chosen: boolean }) {
+  const maxScore = 3.0; // approximate upper bound for normalizing bar
+  const barPct = Math.min(Math.max(opt.score / maxScore, 0), 1) * 100;
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr auto auto auto 64px',
+      alignItems: 'center',
+      gap: 10,
+      padding: '7px 12px',
+      borderRadius: 6,
+      background: chosen ? 'rgba(0,212,255,0.05)' : 'transparent',
+      border: `1px solid ${chosen ? 'rgba(0,212,255,0.2)' : 'transparent'}`,
+    }}>
+      {/* Provider + tier */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {chosen && (
+          <span style={{ fontSize: 9, color: 'var(--accent)', fontFamily: "'IBM Plex Mono', monospace" }}>▶</span>
+        )}
+        <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: chosen ? '#f0f0f0' : '#9ca3af' }}>
+          {opt.provider}
+        </span>
+        <TierChip tier={opt.tier} />
+      </div>
+      {/* Conf */}
+      <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', textAlign: 'right' }}>
+        {(opt.averageConfidence * 100).toFixed(0)}%
+      </span>
+      {/* Latency */}
+      <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', textAlign: 'right' }}>
+        {Math.round(opt.averageLatencyMs)}ms
+      </span>
+      {/* Cost */}
+      <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', textAlign: 'right' }}>
+        ${opt.averageCostUsd.toFixed(5)}
+      </span>
+      {/* Score bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div style={{
+          flex: 1, height: 3, borderRadius: 2,
+          background: 'var(--rim)',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            width: `${barPct}%`, height: '100%', borderRadius: 2,
+            background: chosen ? 'var(--accent)' : 'var(--muted)',
+            transition: 'width 0.4s ease',
+          }} />
+        </div>
+        <span style={{
+          fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
+          color: chosen ? 'var(--accent)' : 'var(--muted)',
+          minWidth: 28, textAlign: 'right',
+        }}>
+          {opt.score.toFixed(2)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
 
 export default function ResponsePanel({ result, error, loading }: Props) {
-  const [showDecision, setShowDecision] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
 
   if (loading) {
     return (
-      <div className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl p-10 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-7 h-7 border-2 border-[#3f3f3f] border-t-emerald-500 rounded-full animate-spin" />
-          <p className="text-xs text-[#8e8e8e]">Routing your prompt...</p>
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--rim)', borderRadius: 12,
+        padding: '20px 20px 0',
+      }}>
+        {/* Skeleton pipeline */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} className="skeleton" style={{ flex: 1, height: 80, borderRadius: 8 }} />
+          ))}
+        </div>
+        {/* Blinking cursor */}
+        <div style={{
+          padding: '20px 4px 28px',
+          borderTop: '1px solid var(--rim)',
+          fontSize: 13.5,
+          fontFamily: "'IBM Plex Mono', monospace",
+          color: 'var(--muted)',
+        }}>
+          routing<span style={{ animation: 'blink 1s step-end infinite', display: 'inline-block', marginLeft: 2 }}>▋</span>
         </div>
       </div>
     );
@@ -154,140 +208,144 @@ export default function ResponsePanel({ result, error, loading }: Props) {
 
   if (error) {
     return (
-      <div className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl px-6 py-5">
-        <p className="text-sm text-red-400 font-medium">Request failed</p>
-        <p className="text-xs text-[#8e8e8e] mt-1">{error}</p>
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--rim)',
+        borderLeft: '3px solid var(--red)',
+        borderRadius: 12, padding: '16px 20px',
+      }}>
+        <p style={{ fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--red)', margin: '0 0 4px' }}>
+          ERROR
+        </p>
+        <p style={{ fontSize: 13, color: '#9ca3af', margin: 0 }}>{error}</p>
       </div>
     );
   }
 
   if (!result) return null;
 
-  const { classification, initialModel, finalModel, escalated, strategyMode, evaluatedOptions } = result;
+  const { classification, initialModel, finalModel, escalated, strategyMode, evaluatedOptions, totalCostUsd, latencyMs } = result;
   const chosenKey = `${initialModel.provider}:${initialModel.tier}`;
 
+  const strategyColor = strategyMode === 'exploitation' ? 'var(--green)'
+    : strategyMode === 'exploration' ? 'var(--amber)'
+    : 'var(--muted)';
+
   return (
-    <div className="bg-[#2f2f2f] border border-[#3f3f3f] rounded-xl overflow-hidden">
-      {/* Response — rendered as Markdown */}
-      <div className="px-6 pt-6 pb-5">
-        <div className="prose prose-invert prose-chat max-w-none text-[15px] leading-[1.75]">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
-          >
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--rim)', borderRadius: 12, overflow: 'hidden' }}>
+
+      {/* ── Pipeline trace ── */}
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--rim)' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+
+          {/* Step 1: Classify */}
+          <PipelineStep index={1} title="Classify" delay={0}>
+            <PipelineRow label="domain"  value={<DomainChip domain={classification.domain} />} />
+            <PipelineRow label="complex" value={COMPLEXITY_LABELS[classification.complexity]} />
+            <PipelineRow label="conf"    value={`${Math.round(classification.confidence * 100)}%`} accent={classification.confidence > 0.75} />
+          </PipelineStep>
+
+          {/* Arrow */}
+          <div style={{ display: 'flex', alignItems: 'center', color: 'var(--muted)', fontSize: 12, flexShrink: 0, paddingTop: 24 }}>
+            →
+          </div>
+
+          {/* Step 2: Route */}
+          <PipelineStep index={2} title="Route" delay={60}>
+            <PipelineRow label="provider" value={mono(initialModel.provider)} />
+            <PipelineRow label="tier"     value={<TierChip tier={initialModel.tier} />} />
+            <PipelineRow label="strategy" value={
+              <span style={{ color: strategyColor, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }}>
+                {strategyMode}
+              </span>
+            } />
+          </PipelineStep>
+
+          {/* Arrow */}
+          <div style={{ display: 'flex', alignItems: 'center', color: 'var(--muted)', fontSize: 12, flexShrink: 0, paddingTop: 24 }}>
+            →
+          </div>
+
+          {/* Step 3: Execute */}
+          <PipelineStep index={3} title="Execute" delay={120}>
+            <PipelineRow label="model"   value={mono(finalModel.model)} />
+            <PipelineRow label="latency" value={`${latencyMs}ms`} />
+            <PipelineRow label="cost"    value={`$${totalCostUsd.toFixed(5)}`} accent />
+          </PipelineStep>
+        </div>
+
+        {/* Escalation notice */}
+        {escalated && (
+          <div style={{
+            marginTop: 10, padding: '5px 10px',
+            background: 'var(--amber-bg)', border: '1px solid rgba(245,158,11,0.25)',
+            borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <span style={{ fontSize: 10, color: 'var(--amber)', fontFamily: "'IBM Plex Mono', monospace" }}>
+              ↑ ESCALATED — initial model confidence below threshold, re-routed to {finalModel.provider}/{finalModel.tier}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Response body ── */}
+      <div style={{ padding: '20px 22px' }}>
+        <div className="prose-router">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
             {result.response}
           </ReactMarkdown>
         </div>
       </div>
 
-      {/* Metadata row */}
-      <div className="px-6 py-3 flex items-center gap-2 flex-wrap border-t border-[#3f3f3f]">
-        <span className="text-xs bg-[#303030] text-[#b4b4b4] border border-[#3f3f3f] px-1.5 py-0.5 rounded">
-          {DOMAIN_LABELS[classification.domain]}
-        </span>
-        <TierBadge tier={finalModel.tier} />
-        <span className="text-[#3f3f3f] text-xs select-none">·</span>
-        <span className="font-mono text-xs text-[#8e8e8e]">{finalModel.model}</span>
-        <span className="text-[#3f3f3f] text-xs select-none">·</span>
-        <span className="text-xs text-[#8e8e8e] tabular-nums">{result.latencyMs} ms</span>
-        <span className="text-[#3f3f3f] text-xs select-none">·</span>
-        <span className="font-mono text-xs text-[#8e8e8e]">${result.totalCostUsd.toFixed(6)}</span>
-        {escalated && (
-          <>
-            <span className="text-[#3f3f3f] text-xs select-none">·</span>
-            <EscalatedBadge />
-          </>
-        )}
-      </div>
-
-      {/* Routing Decision — collapsible pipeline visualization */}
-      <div className="border-t border-[#3f3f3f]">
-        <button
-          type="button"
-          onClick={() => setShowDecision((v) => !v)}
-          className="w-full flex items-center gap-2 px-6 py-2.5 text-xs text-[#8e8e8e] hover:text-[#b4b4b4] hover:bg-[#303030] transition-colors text-left"
-        >
-          <svg
-            className={`w-3 h-3 transition-transform shrink-0 ${showDecision ? 'rotate-90' : ''}`}
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+      {/* ── Evaluated options (collapsible) ── */}
+      {evaluatedOptions.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--rim)' }}>
+          <button
+            type="button"
+            onClick={() => setShowOptions(v => !v)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '9px 16px', fontSize: 10,
+              fontFamily: "'IBM Plex Mono', monospace",
+              color: 'var(--muted)', letterSpacing: '0.07em',
+              background: 'none', border: 'none', cursor: 'pointer',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          Routing Decision
-        </button>
+            <span>EVALUATED OPTIONS ({evaluatedOptions.length})</span>
+            <span style={{ transition: 'transform 0.15s', display: 'inline-block', transform: showOptions ? 'rotate(180deg)' : 'none' }}>▾</span>
+          </button>
 
-        {showDecision && (
-          <div className="px-6 pb-6 pt-5 border-t border-[#3f3f3f] flex flex-col">
-
-            {/* Stage 1: Classifier */}
-            <PipelineStage label="Classifier">
-              <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                <span className="font-medium text-[#ececec]">{DOMAIN_LABELS[classification.domain]}</span>
-                <span className="text-[#3f3f3f]">·</span>
-                <span className="text-[#b4b4b4]">{COMPLEXITY_LABELS[classification.complexity]} complexity</span>
-                <span className="text-[#3f3f3f]">·</span>
-                <span className="text-[#b4b4b4]">{Math.round(classification.confidence * 100)}% confidence</span>
-                <span className="text-[#3f3f3f]">·</span>
-                <span className="text-[#8e8e8e]">~{classification.estimatedTokens.toLocaleString()} tokens</span>
+          {showOptions && (
+            <div style={{ borderTop: '1px solid var(--rim)' }}>
+              {/* Table header */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto auto auto 64px',
+                gap: 10, padding: '6px 12px',
+                borderBottom: '1px solid var(--rim)',
+              }}>
+                {['provider/tier', 'conf', 'latency', 'cost', 'score'].map(h => (
+                  <span key={h} style={{
+                    fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
+                    color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase',
+                    textAlign: h !== 'provider/tier' ? 'right' : 'left',
+                  }}>{h}</span>
+                ))}
               </div>
-            </PipelineStage>
-
-            <Arrow />
-
-            {/* Stage 2: Strategy Engine */}
-            <PipelineStage label="Strategy Engine">
-              <StrategyModeBadge mode={strategyMode} />
-            </PipelineStage>
-
-            <Arrow />
-
-            {/* Stage 3: Evaluated options or fallback note */}
-            {evaluatedOptions.length > 0 ? (
-              <div className="bg-[#303030] border border-[#3f3f3f] rounded-xl overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-[#3f3f3f] flex items-center gap-2 flex-wrap">
-                  <p className="text-[11px] text-[#8e8e8e] uppercase tracking-wide font-medium">
-                    Evaluated Options
-                  </p>
-                  {strategyMode === 'exploration' && (
-                    <span className="text-[11px] text-amber-400">
-                      — ε exploration bypassed scoring
-                    </span>
-                  )}
-                </div>
-                <div className="px-2 py-2 flex flex-col gap-0.5">
-                  {evaluatedOptions.map((opt) => (
-                    <OptionRow
-                      key={`${opt.provider}:${opt.tier}`}
-                      option={opt}
-                      isChosen={strategyMode === 'exploitation' && `${opt.provider}:${opt.tier}` === chosenKey}
-                    />
-                  ))}
-                </div>
+              <div style={{ padding: '4px 0' }}>
+                {evaluatedOptions.map(opt => (
+                  <OptionRow
+                    key={`${opt.provider}:${opt.tier}`}
+                    opt={opt}
+                    chosen={strategyMode === 'exploitation' && `${opt.provider}:${opt.tier}` === chosenKey}
+                  />
+                ))}
               </div>
-            ) : (
-              <PipelineStage label="Default Routing">
-                <p className="text-xs text-[#8e8e8e]">
-                  No historical data — using built-in routing table.
-                </p>
-              </PipelineStage>
-            )}
-
-            <Arrow />
-
-            {/* Stage 4: Selected model */}
-            <PipelineStage label={escalated ? 'Escalated Model' : 'Selected Model'}>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <ProviderBadge provider={finalModel.provider} />
-                <TierBadge tier={finalModel.tier} />
-                <span className="font-mono text-xs text-[#b4b4b4]">{finalModel.model}</span>
-                {escalated && <EscalatedBadge />}
-              </div>
-              <p className="text-[11px] text-[#8e8e8e] mt-1.5 leading-snug">{finalModel.reason}</p>
-            </PipelineStage>
-
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
