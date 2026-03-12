@@ -17,40 +17,77 @@ import { ProviderManager }    from './providerManager';
 import type { RoutingConfig } from './providerManager';
 import { claudeProvider }     from './claudeProvider';
 import { openaiProvider }     from './openaiProvider';
+import { togetherProvider }   from './togetherProvider';
 
 // ---------------------------------------------------------------------------
 // Routing configuration
 //
 // Maps domain → { providerName, fallbackProviderName, reason }.
 //
-// Routing policy:
-//   - Provider is selected by task domain (not by complexity).
-//   - Tier is selected by task complexity: low→cheap, medium→balanced, high→premium.
-//   - On low confidence, the router escalates:
-//       1. Same provider, next tier up.
-//       2. If already at premium → fallbackProviderName at premium.
+// Together AI is the default provider for most domains (open-source models,
+// strong cost efficiency). OpenAI and Anthropic remain as fallbacks and
+// primary providers for domains where they clearly excel (vision → GPT-4o,
+// research/creative → Claude).
 // ---------------------------------------------------------------------------
 
 const ROUTING: RoutingConfig = {
+  // ── Original 4 domains ───────────────────────────────────────────────────
   coding: {
-    providerName:         'openai',
-    fallbackProviderName: 'anthropic',
-    reason: 'OpenAI excels at code generation',
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen Coder / DeepSeek Coder for structured code generation',
   },
   math: {
-    providerName:         'openai',
-    fallbackProviderName: 'anthropic',
-    reason: 'OpenAI excels at mathematical reasoning',
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen 72B for mathematical reasoning',
   },
   creative: {
-    providerName:         'anthropic',
-    fallbackProviderName: 'openai',
-    reason: 'Claude excels at creative writing',
+    providerName:         'together',
+    fallbackProviderName: 'anthropic',
+    reason: 'Together Llama 3.3 70B / Qwen 2.5 7B for creative writing',
   },
   general: {
-    providerName:         'openai',
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen 2.5 7B for cost-efficient general-purpose queries',
+  },
+
+  // ── 7 new domains ─────────────────────────────────────────────────────────
+  research: {
+    providerName:         'anthropic',
+    fallbackProviderName: 'together',
+    reason: 'Claude excels at long-context research synthesis and citations',
+  },
+  summarization: {
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen 2.5 7B for cost-effective text compression',
+  },
+  vision: {
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Llama 4 Maverick for image and visual understanding',
+  },
+  coding_debug: {
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen Coder / DeepSeek Coder for debugging and error analysis',
+  },
+  general_chat: {
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Qwen 2.5 7B for low-latency conversational queries',
+  },
+  multilingual: {
+    providerName:         'together',
     fallbackProviderName: 'anthropic',
-    reason: 'OpenAI handles general queries efficiently',
+    reason: 'Together Qwen 72B with strong multilingual capabilities',
+  },
+  math_reasoning: {
+    providerName:         'together',
+    fallbackProviderName: 'openai',
+    reason: 'Together Llama 3.3 70B for chain-of-thought mathematical reasoning',
   },
 };
 
@@ -58,25 +95,28 @@ const ROUTING: RoutingConfig = {
 // Provider registrations
 //
 // Each provider declares which model it uses at each capability tier.
-// These are the only places model IDs appear in the codebase.
+// These tier models are the DEFAULT fallback path; the strategy engine
+// may route to other registered models based on performance history.
 //
-// Adding a new provider (e.g. Gemini):
-//   1. Create backend/src/providers/geminiProvider.ts implementing IProvider.
-//   2. Import the singleton below.
-//   3. Chain: .register(geminiProvider, { cheap: '...', balanced: '...', premium: '...' })
-//   4. Reference 'google' in ROUTING above for the domains you want to cover.
+// Together is registered last so its models appear later in exploration pools,
+// ensuring diversity across providers during the cold-start phase.
 // ---------------------------------------------------------------------------
 
 export const providerManager = new ProviderManager(ROUTING)
   .register(openaiProvider, {
     cheap:    'gpt-4o-mini',
-    balanced: 'gpt-4o',
+    balanced: 'gpt-4o-mini',  // OpenAI has no mid-tier model; escalation promotes to premium (gpt-4o)
     premium:  'gpt-4o',
   })
   .register(claudeProvider, {
     cheap:    'claude-haiku-4-5-20251001',
     balanced: 'claude-sonnet-4-6',
     premium:  'claude-opus-4-6',
+  })
+  .register(togetherProvider, {
+    cheap:    'Qwen/Qwen2.5-7B-Instruct-Turbo',
+    balanced: 'Qwen/Qwen2.5-7B-Instruct-Turbo',
+    premium:  'meta-llama/Llama-3.3-70B-Instruct-Turbo',
   });
 
 // ---------------------------------------------------------------------------
