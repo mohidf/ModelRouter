@@ -79,17 +79,25 @@ export class EmbeddingClassifier {
 
     const scores = this.anchors!.map(({ domain, vectors }) => ({
       domain,
-      score: this.meanSimilarity(promptVec, vectors),
+      // Max (nearest-neighbour) similarity: finds the single closest anchor in each
+      // domain rather than averaging all anchors. This prevents diverse anchor sets
+      // (like 'general' with 20 varied examples) from having their centroid pulled
+      // away from the query by unrelated anchors — the exact-match anchor dominates.
+      score: this.maxSimilarity(promptVec, vectors),
     }));
 
     scores.sort((a, b) => b.score - a.score);
     const top = scores[0];
 
-    const positiveTotal = scores.reduce((sum, s) => sum + Math.max(0, s.score), 0);
-    const confidence =
-      positiveTotal > 0
-        ? parseFloat((Math.max(0, top.score) / positiveTotal).toFixed(2))
-        : 0.5;
+    // Margin-based confidence: how much better is the top domain than the runner-up?
+    // Formula: (top - second) / top — range [0, 1], domain-count-independent.
+    // The old sum-based formula produced ~0.10–0.15 with 12 domains regardless of
+    // match quality, causing almost everything to fall below the escalation threshold.
+    const second = scores[1]?.score ?? 0;
+    const raw = top.score > 0
+      ? (top.score - Math.max(0, second)) / top.score
+      : 0;
+    const confidence = parseFloat(Math.min(Math.max(raw, 0), 1).toFixed(2));
 
     return {
       domain:     top.domain,
@@ -142,13 +150,12 @@ export class EmbeddingClassifier {
     return response.data[0].embedding;
   }
 
-  /** Mean cosine similarity of a single vector against an array of vectors. */
-  private meanSimilarity(query: number[], references: number[][]): number {
-    const total = references.reduce(
-      (sum, ref) => sum + this.cosineSimilarity(query, ref),
-      0,
+  /** Max cosine similarity (nearest-neighbour) of a query against an anchor set. */
+  private maxSimilarity(query: number[], references: number[][]): number {
+    return references.reduce(
+      (best, ref) => Math.max(best, this.cosineSimilarity(query, ref)),
+      -Infinity,
     );
-    return total / references.length;
   }
 
   /**
