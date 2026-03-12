@@ -79,6 +79,48 @@ const RESPONSES: Record<TaskDomain, Record<ModelTier, string>> = {
 
     premium: `This is a topic worth exploring carefully because the surface answer and the correct answer often diverge. Starting from first principles: [foundational concept]. The mainstream view is [position A], supported by [evidence]. A minority but well-argued position holds [position B], and the tension between the two is productive. The empirical record shows [pattern], with notable exceptions in [context]. Common misconceptions arise from conflating [X] with [Y] — they share vocabulary but differ in mechanism. For practical purposes, the decision framework I would recommend is [framework], applied in the order [sequence]. Caveats: this analysis holds under [conditions]; if [condition] does not apply to you, [alternative]. The literature worth reading further includes [domain-level pointers].`,
   },
+
+  research: {
+    cheap:    `Key finding: [conclusion]. Notable caveats: [caveats].`,
+    balanced: `Research summary: The evidence supports [conclusion], drawn from [sources]. Competing views include [alternative]. Methodological note: [note].`,
+    premium:  `Comprehensive synthesis: The literature across [scope] converges on [conclusion] with effect size [d]. Conflicting results arise from [confound]. Mechanism: [pathway]. Policy implication: [recommendation]. Gaps: [gap].`,
+  },
+
+  summarization: {
+    cheap:    `Key points: (1) [main idea], (2) [secondary point], (3) [conclusion].`,
+    balanced: `Summary: [topic]. Main argument: [claim]. Supporting evidence: [evidence]. Conclusion: [conclusion].`,
+    premium:  `Executive summary: Central thesis: [thesis]. Key data: [data]. Recommendations: [recommendations]. Risks: [risks].`,
+  },
+
+  vision: {
+    cheap:    `The image shows [main subject] with [key detail].`,
+    balanced: `Scene: [scene]. Foreground: [foreground]. Background: [background]. Notable elements: [elements].`,
+    premium:  `Detailed analysis: [full scene]. Objects: [objects]. Text visible: [text]. Color palette: [colors]. Interpretation: [context].`,
+  },
+
+  coding_debug: {
+    cheap:    `The issue is likely [cause]. Fix: [fix].`,
+    balanced: `Root cause: [cause]. Affected code path: [path]. Fix: [fix]. Prevention: [prevention].`,
+    premium:  `Debug report: Error at [location] due to [root cause]. Stack analysis: [analysis]. Fix: [implementation]. Tests to add: [tests].`,
+  },
+
+  general_chat: {
+    cheap:    `Sure! [direct answer].`,
+    balanced: `Great question. [answer with context]. Let me know if you'd like more detail.`,
+    premium:  `Happy to help. [thorough answer with examples]. Is there a specific angle you'd like to explore further?`,
+  },
+
+  multilingual: {
+    cheap:    `Translation: "[translated text]".`,
+    balanced: `Translation: "[translated text]". Note on phrasing: [note]. Alternative: "[alt]".`,
+    premium:  `Translation: "[full text]". Translator notes: [notes]. Cultural context: [context].`,
+  },
+
+  math_reasoning: {
+    cheap:    `Step 1: [setup]. Step 2: [calculation]. Answer: [result].`,
+    balanced: `Step-by-step: Given [knowns]. (1) [step]. (2) [step]. Result: [conclusion]. Verification: [check].`,
+    premium:  `Full solution: Setup: [setup]. (1) [step + justification]. (2) [step]. Result: [result]. Verification: [check]. Edge cases: [edge cases].`,
+  },
 };
 
 /** Build a mock response driven by tier depth, not model name. */

@@ -14,6 +14,7 @@
 
 import type { IProvider, GenerateOptions, GenerateResult, CostEstimate } from './baseProvider';
 import type { TaskDomain, TaskComplexity, ModelTier } from './types';
+import { getModelById } from '../config/models';
 
 // ---------------------------------------------------------------------------
 // Complexity → tier mapping
@@ -240,6 +241,24 @@ export class ProviderManager {
     );
 
     return { result, cost };
+  }
+
+  /**
+   * Resolve a specific model by its canonical ID from the model registry.
+   * Used by StrategyEngine when performance data nominates a specific model
+   * (rather than a generic provider+tier combination).
+   *
+   * Throws if the model is not in the registry or its provider is not registered.
+   */
+  resolveByModelId(modelId: string, reason: string): ResolvedModel {
+    const descriptor = getModelById(modelId);
+    if (!descriptor) {
+      throw new Error(
+        `ProviderManager.resolveByModelId: "${modelId}" is not in the model registry.`,
+      );
+    }
+    const { provider } = this.entry(descriptor.provider);
+    return { provider, model: modelId, tier: descriptor.tier, reason };
   }
 
   // ── Private ───────────────────────────────────────────────────────────────

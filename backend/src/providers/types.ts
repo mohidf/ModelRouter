@@ -12,7 +12,25 @@
 
 export type TaskComplexity = 'low' | 'medium' | 'high';
 
-export type TaskDomain = 'coding' | 'math' | 'creative' | 'general';
+export type TaskDomain =
+  | 'coding'
+  | 'math'
+  | 'creative'
+  | 'general'
+  | 'research'
+  | 'summarization'
+  | 'vision'
+  | 'coding_debug'
+  | 'general_chat'
+  | 'multilingual'
+  | 'math_reasoning';
+
+/** All valid task domain values — derive arrays from this to stay in sync. */
+export const ALL_DOMAINS: readonly TaskDomain[] = [
+  'coding', 'math', 'creative', 'general',
+  'research', 'summarization', 'vision',
+  'coding_debug', 'general_chat', 'multilingual', 'math_reasoning',
+];
 
 // ---------------------------------------------------------------------------
 // Model tier — describes provider capability, distinct from task complexity.
@@ -60,14 +78,16 @@ export interface RouteRequest {
 
 /** A single scored candidate from the strategy engine. */
 export interface EvaluatedOption {
-  provider: string;
-  tier: ModelTier;
-  score: number;
+  /** Canonical model ID (e.g. "meta-llama/Llama-3.3-70B-Instruct"). */
+  modelId:           string;
+  provider:          string;
+  tier:              ModelTier;
+  score:             number;
   averageConfidence: number;
-  averageLatencyMs: number;
-  averageCostUsd: number;
-  escalationRate: number;
-  totalRequests: number;
+  averageLatencyMs:  number;
+  averageCostUsd:    number;
+  escalationRate:    number;
+  totalRequests:     number;
 }
 
 export interface RouteResponse {
