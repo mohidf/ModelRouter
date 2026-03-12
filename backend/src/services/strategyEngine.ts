@@ -2,6 +2,8 @@ import type { TaskDomain, TaskComplexity, ModelTier } from '../providers/types';
 import type { ResolvedModel } from '../providers/providerManager';
 import { providerManager } from '../providers';
 import { performanceStore, type PerformanceStats } from './performanceStore';
+import { MODEL_REGISTRY } from '../config/models';
+import { logger } from '../utils/logger';
 
 // ---------------------------------------------------------------------------
 // Normalisation bounds
@@ -46,27 +48,72 @@ export interface WeightOverrideConfig {
 export const DEFAULT_TASK_WEIGHTS: Readonly<Record<TaskDomain, TaskWeights>> = {
   coding: {
     confidenceWeight: 2.0,  // correctness matters most
-    costWeight:       2.5,  // raised: providers return equal confidence, so cost must differentiate
+    costWeight:       3.0,  // cost differentiates when all providers return equal confidence
     latencyWeight:    0.5,
-    escalationWeight: 1.5,
+    escalationWeight: 0.8,  // reduced: escalation reflects classifier ambiguity, not model quality
+  },
+  coding_debug: {
+    confidenceWeight: 3.0,  // highest correctness bar — wrong debug advice wastes dev time
+    costWeight:       2.0,
+    latencyWeight:    0.5,
+    escalationWeight: 1.0,
   },
   math: {
-    confidenceWeight: 2.5,  // accuracy is critical; escalation strongly penalised
-    costWeight:       2.5,  // raised: prevents premium lock-in when cheaper models succeed equally
+    confidenceWeight: 2.5,  // accuracy is critical
+    costWeight:       3.0,
     latencyWeight:    0.5,
-    escalationWeight: 2.0,
+    escalationWeight: 0.8,
+  },
+  math_reasoning: {
+    confidenceWeight: 3.0,  // chain-of-thought correctness is paramount
+    costWeight:       2.5,
+    latencyWeight:    0.5,
+    escalationWeight: 1.0,
   },
   creative: {
     confidenceWeight: 1.0,
-    costWeight:       3.0,  // raised: creative tasks have lowest correctness bar, most cost-sensitive
+    costWeight:       4.0,  // creative tasks have lowest correctness bar, most cost-sensitive
     latencyWeight:    0.3,
-    escalationWeight: 0.8,
+    // Low escalation penalty: escalation here reflects low classifier confidence,
+    // not poor model output quality — don't double-punish cheap models for it.
+    escalationWeight: 0.2,
+  },
+  research: {
+    confidenceWeight: 2.0,  // factual accuracy over cost
+    costWeight:       1.5,
+    latencyWeight:    0.5,
+    escalationWeight: 1.5,
+  },
+  summarization: {
+    confidenceWeight: 1.0,  // any capable model can summarize — optimize for cost
+    costWeight:       4.5,
+    latencyWeight:    0.5,
+    escalationWeight: 0.2,  // same rationale as creative — don't penalize cheap models
+  },
+  vision: {
+    confidenceWeight: 2.5,  // quality matters — only certain models support vision
+    costWeight:       1.5,
+    latencyWeight:    1.0,
+    escalationWeight: 2.0,
   },
   general: {
     confidenceWeight: 1.0,
-    costWeight:       2.5,  // raised: general queries should use cheapest adequate model
+    costWeight:       4.0,  // general queries should use cheapest adequate model
     latencyWeight:    1.0,
-    escalationWeight: 1.0,
+    // Escalation on general queries reflects ambiguous phrasing, not model failure.
+    escalationWeight: 0.2,
+  },
+  general_chat: {
+    confidenceWeight: 0.8,  // speed and cost dominate for chitchat
+    costWeight:       4.5,
+    latencyWeight:    1.5,
+    escalationWeight: 0.2,  // chitchat escalation is nearly always classifier noise
+  },
+  multilingual: {
+    confidenceWeight: 2.0,  // translation quality matters
+    costWeight:       2.5,
+    latencyWeight:    0.8,
+    escalationWeight: 0.5,
   },
 };
 
@@ -118,17 +165,21 @@ function parseWeightsEnv(envVar: string | undefined): Partial<TaskWeights> | nul
 
 function buildEffectiveWeights(): Record<TaskDomain, TaskWeights> {
   const envMap: Record<TaskDomain, string | undefined> = {
-    coding:   process.env.CODE_WEIGHTS,
-    math:     process.env.MATH_WEIGHTS,
-    creative: process.env.CREATIVE_WEIGHTS,
-    general:  process.env.GENERAL_WEIGHTS,
+    coding:        process.env.CODE_WEIGHTS,
+    coding_debug:  process.env.CODING_DEBUG_WEIGHTS,
+    math:          process.env.MATH_WEIGHTS,
+    math_reasoning: process.env.MATH_REASONING_WEIGHTS,
+    creative:      process.env.CREATIVE_WEIGHTS,
+    research:      process.env.RESEARCH_WEIGHTS,
+    summarization: process.env.SUMMARIZATION_WEIGHTS,
+    vision:        process.env.VISION_WEIGHTS,
+    general:       process.env.GENERAL_WEIGHTS,
+    general_chat:  process.env.GENERAL_CHAT_WEIGHTS,
+    multilingual:  process.env.MULTILINGUAL_WEIGHTS,
   };
-  const result: Record<TaskDomain, TaskWeights> = {
-    coding:   { ...DEFAULT_TASK_WEIGHTS.coding },
-    math:     { ...DEFAULT_TASK_WEIGHTS.math },
-    creative: { ...DEFAULT_TASK_WEIGHTS.creative },
-    general:  { ...DEFAULT_TASK_WEIGHTS.general },
-  };
+  const result = Object.fromEntries(
+    Object.entries(DEFAULT_TASK_WEIGHTS).map(([k, v]) => [k, { ...v }]),
+  ) as Record<TaskDomain, TaskWeights>;
   for (const [domain, envVal] of Object.entries(envMap) as [TaskDomain, string | undefined][]) {
     const overrides = parseWeightsEnv(envVal);
     if (overrides) result[domain] = { ...result[domain], ...overrides };
@@ -204,7 +255,7 @@ export class StrategyEngine {
       return { ...this.exploreRandom(taskType, complexity), rankedOptions };
     }
 
-    return { ...this.exploit(candidates, weights), rankedOptions };
+    return { ...this.exploit(candidates, weights, taskType, complexity), rankedOptions };
   }
 
   async rankStats(
@@ -219,53 +270,74 @@ export class StrategyEngine {
   }
 
   private exploreRandom(taskType: TaskDomain, complexity: TaskComplexity): Omit<StrategyDecision, 'rankedOptions'> {
-    const providers = providerManager.listProviders();
-    // Constrain exploration to tiers appropriate for the task complexity.
-    // Without this, a high-complexity prompt could be routed to 'cheap' tier
-    // during exploration, giving the user a degraded response.
+    // Build exploration pool from model registry, constrained to tiers valid
+    // for the task complexity. This gives per-model granularity during exploration
+    // instead of per-(provider, tier) pairs.
     const validTiers = EXPLORATION_TIERS[complexity];
+    const pool = MODEL_REGISTRY.filter(m => (validTiers as readonly ModelTier[]).includes(m.tier));
 
-    const pool: { providerName: string; tier: ModelTier }[] = [];
-    for (const p of providers) {
-      for (const tier of validTiers) {
-        pool.push({ providerName: p.name, tier });
-      }
+    // Guard: if no models match the tier constraint (misconfigured registry),
+    // fall back to the default routing decision rather than crashing on
+    // an undefined index access.
+    if (pool.length === 0) {
+      return {
+        resolved:     providerManager.resolve(taskType, complexity),
+        winningStats: null,
+        score:        null,
+        usedFallback: true,
+        explored:     false,
+      };
     }
 
     const pick = pool[Math.floor(Math.random() * pool.length)];
-    const resolved = providerManager.resolveExplicit(
-      pick.providerName,
-      pick.tier,
-      `Exploration (ε=${this.epsilon}): random ${pick.providerName}/${pick.tier} for ${taskType}`,
+    const resolved = providerManager.resolveByModelId(
+      pick.id,
+      `Exploration (ε=${this.epsilon}): ${pick.displayName} (${pick.tier}) for ${taskType}`,
     );
 
     return { resolved, winningStats: null, score: null, usedFallback: false, explored: true };
   }
 
-  private exploit(candidates: PerformanceStats[], weights: TaskWeights): Omit<StrategyDecision, 'rankedOptions'> {
-    let winner:    PerformanceStats | null = null;
-    let bestScore  = -Infinity;
+  private exploit(
+    candidates:  PerformanceStats[],
+    weights:     TaskWeights,
+    taskType:    TaskDomain,
+    complexity:  TaskComplexity,
+  ): Omit<StrategyDecision, 'rankedOptions'> {
+    // Sort descending by score so we try the best candidate first.
+    const ranked = [...candidates]
+      .map(s => ({ stats: s, score: this.scoreStats(s, weights) }))
+      .sort((a, b) => b.score - a.score);
 
-    for (const stats of candidates) {
-      const s = this.scoreStats(stats, weights);
-      if (s > bestScore) {
-        bestScore = s;
-        winner    = stats;
+    for (const { stats: w, score: bestScore } of ranked) {
+      try {
+        const resolved = providerManager.resolveByModelId(
+          w.modelId,
+          `Strategy: ${w.modelId} scored ${bestScore.toFixed(3)} ` +
+          `(conf ${(w.averageConfidence * 100).toFixed(0)}%, ` +
+          `esc ${(w.escalationRate * 100).toFixed(0)}%, ` +
+          `${Math.round(w.averageLatencyMs)} ms, ` +
+          `$${w.averageCostUsd.toFixed(6)})`,
+        );
+        return { resolved, winningStats: w, score: bestScore, usedFallback: false, explored: false };
+      } catch {
+        // Model ID is stale (removed from registry or provider no longer registered).
+        // Log once and try the next-best candidate rather than surfacing a 500.
+        logger.warn('StrategyEngine.exploit: skipping stale model ID', {
+          modelId: w.modelId, taskType,
+        });
       }
     }
 
-    const w = winner!;
-    const resolved = providerManager.resolveExplicit(
-      w.provider,
-      w.tier,
-      `Strategy: ${w.provider}/${w.tier} scored ${bestScore.toFixed(3)} ` +
-      `(conf ${(w.averageConfidence * 100).toFixed(0)}%, ` +
-      `esc ${(w.escalationRate * 100).toFixed(0)}%, ` +
-      `${Math.round(w.averageLatencyMs)} ms, ` +
-      `$${w.averageCostUsd.toFixed(6)})`,
-    );
-
-    return { resolved, winningStats: w, score: bestScore, usedFallback: false, explored: false };
+    // All performance candidates are stale — fall back to static routing.
+    logger.warn('StrategyEngine.exploit: all candidates stale, using static routing fallback', { taskType });
+    return {
+      resolved:     providerManager.resolve(taskType, complexity),
+      winningStats: null,
+      score:        null,
+      usedFallback: true,
+      explored:     false,
+    };
   }
 
   private scoreStats(stats: PerformanceStats, weights: TaskWeights): number {

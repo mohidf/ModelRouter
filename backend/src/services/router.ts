@@ -148,6 +148,7 @@ export class RoutingEngine {
     // Fire-and-forget: persist the completed routing decision
     logRequest({
       prompt,
+      modelId:    finalModel.model,
       provider:   finalModel.provider,
       tier:       finalModel.tier,
       taskType:   domain,
@@ -178,6 +179,7 @@ export class RoutingEngine {
                        : 'exploitation';
 
     const evaluatedOptions: EvaluatedOption[] = decision.rankedOptions.map(s => ({
+      modelId:           s.modelId,
       provider:          s.provider,
       tier:              s.tier,
       score:             s.score,
@@ -278,6 +280,7 @@ export class RoutingEngine {
     escalated: boolean,
   ): void {
     performanceStore.recordResult({
+      modelId:    resolved.model,
       provider:   resolved.provider.name,
       tier:       resolved.tier,
       taskType:   domain,

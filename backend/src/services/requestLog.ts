@@ -20,6 +20,8 @@ import { getSupabaseClient } from '../lib/supabase';
 
 export interface LogRequestParams {
   prompt:     string;
+  /** Canonical model ID (e.g. "meta-llama/Llama-3.3-70B-Instruct"). */
+  modelId:    string;
   provider:   string;
   tier:       ModelTier;
   taskType:   TaskDomain;
@@ -39,6 +41,7 @@ export async function logRequest(params: LogRequestParams): Promise<void> {
     .insert({
       prompt_hash:   hashPrompt(params.prompt),
       prompt_length: params.prompt.length,
+      model_id:      params.modelId,
       provider:      params.provider,
       tier:          params.tier,
       task_type:     params.taskType,

@@ -4,7 +4,7 @@
  * Persistent performance tracking backed by Supabase (PostgreSQL).
  *
  * Each row in the `performance_stats` table represents a unique
- * (provider, tier, taskType) bucket. Rolling averages are maintained
+ * (model_id, task_type) bucket. Rolling averages are maintained
  * atomically in the database via the `record_performance` PL/pgSQL RPC.
  * The RPC receives `p_alpha` (EMA smoothing factor from config.emaAlpha)
  * and applies it to update the stored averages — refer to the RPC source
@@ -28,7 +28,11 @@ import { config } from '../config';
 // ---------------------------------------------------------------------------
 
 export interface RecordResultParams {
+  /** Canonical model ID (e.g. "meta-llama/Llama-3.3-70B-Instruct"). Primary key. */
+  modelId:    string;
+  /** Provider name — stored denormalized for display queries. */
   provider:   string;
+  /** Capability tier — stored denormalized for display queries. */
   tier:       ModelTier;
   taskType:   TaskDomain;
   latencyMs:  number;
@@ -40,7 +44,11 @@ export interface RecordResultParams {
 }
 
 export interface PerformanceStats {
+  /** Canonical model ID — primary key dimension replacing (provider, tier). */
+  modelId:           string;
+  /** Provider name — kept for display and fallback resolution. */
   provider:          string;
+  /** Capability tier — kept for display and exploration constraints. */
   tier:              ModelTier;
   taskType:          TaskDomain;
   totalRequests:     number;
@@ -56,6 +64,7 @@ export interface PerformanceStats {
 // ---------------------------------------------------------------------------
 
 interface DbRow {
+  model_id:        string;
   provider:        string;
   tier:            string;
   task_type:       string;
@@ -84,9 +93,10 @@ export class PerformanceStore {
    * for the final model (with escalated: false for that second call).
    */
   async recordResult(params: RecordResultParams): Promise<void> {
-    const { provider, tier, taskType, latencyMs, confidence, escalated, costUsd } = params;
+    const { modelId, provider, tier, taskType, latencyMs, confidence, escalated, costUsd } = params;
 
     const { error } = await getSupabaseClient().rpc('record_performance', {
+      p_model_id:   modelId,
       p_provider:   provider,
       p_tier:       tier,
       p_task_type:  taskType,
@@ -105,19 +115,17 @@ export class PerformanceStore {
   // ── Read ──────────────────────────────────────────────────────────────────
 
   /**
-   * Return computed stats for a specific (provider, tier, taskType) triple.
+   * Return computed stats for a specific (modelId, taskType) pair.
    * Returns null if no data has been recorded for this combination yet.
    */
   async getStats(
-    provider: string,
-    tier:     ModelTier,
+    modelId:  string,
     taskType: TaskDomain,
   ): Promise<PerformanceStats | null> {
     const { data, error } = await getSupabaseClient()
       .from('performance_stats')
       .select('*')
-      .eq('provider',  provider)
-      .eq('tier',      tier)
+      .eq('model_id',  modelId)
       .eq('task_type', taskType)
       .maybeSingle();
 
@@ -149,6 +157,7 @@ export class PerformanceStore {
 
   private toStats(row: DbRow): PerformanceStats {
     return {
+      modelId:           row.model_id,
       provider:          row.provider,
       tier:              row.tier as ModelTier,
       taskType:          row.task_type as TaskDomain,
