@@ -65,12 +65,11 @@ describe('RuleBasedClassifier — domain detection', () => {
     expect(result.domain).toBe('coding');
   });
 
-  it('classifies bug/debug keywords as coding', async () => {
-    // Why: "debug", "error", "bug" are weight-3 signals.
-    // Failure mode: a user asking for debugging help gets a general model
-    // that produces weaker code analysis.
+  it('classifies bug/debug keywords as coding_debug', async () => {
+    // Why: "debug", "error", "bug" are strong signals for the coding_debug domain,
+    // which routes to models specialised in debugging rather than general coding.
     const result = await classifier.classify('Help me debug this error in my code');
-    expect(result.domain).toBe('coding');
+    expect(result.domain).toBe('coding_debug');
   });
 
   it('classifies API/database keywords as coding', async () => {
@@ -145,6 +144,153 @@ describe('RuleBasedClassifier — domain detection', () => {
     const result = await classifier.classify('what is the capital of France');
     expect(result.domain).toBe('general');
     expect(result.confidence).toBe(0.5);
+  });
+
+  // ── New domains: coding_debug ──
+
+  it('classifies explicit debug/error keywords as coding_debug', async () => {
+    // Why: "error" (weight 5) and "fix this" (weight 5) are the two
+    // highest-weight coding_debug signals. Together they should easily beat
+    // any competing domain score.
+    const result = await classifier.classify('fix this error: TypeError cannot read property of undefined');
+    expect(result.domain).toBe('coding_debug');
+  });
+
+  it('classifies null pointer / assertion errors as coding_debug', async () => {
+    const result = await classifier.classify('null pointer exception when calling the function');
+    expect(result.domain).toBe('coding_debug');
+  });
+
+  // ── New domains: math_reasoning ──
+
+  it('classifies step-by-step reasoning requests as math_reasoning', async () => {
+    // Why: "step by step" is a weight-5 signal for math_reasoning.
+    const result = await classifier.classify('solve this step by step and show your work');
+    expect(result.domain).toBe('math_reasoning');
+  });
+
+  it('classifies word problems as math_reasoning', async () => {
+    // Why: "how many" + "there are N" both trigger math_reasoning signals (weight 4 each).
+    // Avoid words like "class" which are also weight-4 coding keywords.
+    const result = await classifier.classify('there are 24 people at a party, how many handshakes are possible?');
+    expect(result.domain).toBe('math_reasoning');
+  });
+
+  // ── New domains: research ──
+
+  it('classifies journal/citation prompts as research', async () => {
+    // Why: "journal" (weight 5) and "peer-reviewed" (weight 5) are top signals.
+    const result = await classifier.classify('find citations from a peer-reviewed journal on this topic');
+    expect(result.domain).toBe('research');
+  });
+
+  it('classifies analyze/compare prompts as research', async () => {
+    // Why: "compare" (weight 3) + "analyze" (weight 3) accumulate to a strong research score.
+    const result = await classifier.classify('compare and analyze the research evidence on this topic');
+    expect(result.domain).toBe('research');
+  });
+
+  it('does NOT classify "history of X" phrasing as research', async () => {
+    // Regression test for the "Ada Lovelace" fix.
+    // Previously the pattern /\b(history of|...)\b/ (weight 2) fired on phrases
+    // like "in the history of computing" — making the rule-based classifier
+    // return research:1.0 (fast path), skipping the embedding classifier.
+    // The pattern was removed because it produced too many false positives on
+    // general factual questions. Now "history of X" prompts fall through to the
+    // embedding path (returned as general:0.5 by rule-based) as intended.
+    const result = await classifier.classify(
+      'Who was Ada Lovelace and why is she significant in the history of computing?'
+    );
+    // Must NOT classify as research via the fast path — falls back to general
+    expect(result.domain).toBe('general');
+    expect(result.confidence).toBe(0.5);  // neutral — embedding classifier takes over
+  });
+
+  it('classifies academic-vocabulary research prompts as research (not affected by fix)', async () => {
+    // Positive counterpart to the above: the removal of "history of" must not
+    // break prompts that contain genuine academic signals (literature, study, evidence).
+    const result = await classifier.classify(
+      'What does the peer-reviewed literature say about the long-term effects of caffeine on cognition?'
+    );
+    expect(result.domain).toBe('research');
+  });
+
+  it('classifies systematic-review vocabulary as research', async () => {
+    // Tests the replacement pattern: /\b(meta.analysis|systematic review|...)\b/
+    // Note: the prompt must NOT start with "summarize" — that is a weight-10
+    // summarization signal that would beat the weight-3 research signal.
+    const result = await classifier.classify(
+      'What do the latest systematic reviews conclude about intermittent fasting and metabolic health?'
+    );
+    expect(result.domain).toBe('research');
+  });
+
+  it('does NOT fast-path "Northern Lights" as vision (no image keywords)', async () => {
+    // Regression test: "What causes the Northern Lights and where is the best place to see them?"
+    // used to be pulled into vision because the embedding's "see" association.
+    // The rule-based classifier must NOT fire any vision signals for this prompt
+    // (no image/photo/screenshot/diagram keywords) — it must fall back to general:0.5
+    // so the embedding classifier gets a clean shot at it.
+    const result = await classifier.classify(
+      'What causes the Northern Lights and where is the best place to see them?'
+    );
+    // Rule-based should produce general:0.5 — no domain-specific vocabulary matches
+    expect(result.domain).toBe('general');
+    expect(result.confidence).toBe(0.5);
+  });
+
+  // ── New domains: summarization ──
+
+  it('classifies explicit summarize requests as summarization', async () => {
+    // Why: "summarize" is a weight-5 signal and also matches the
+    // start-of-prompt weight-5 anchor pattern.
+    const result = await classifier.classify('summarize the following article for me');
+    expect(result.domain).toBe('summarization');
+  });
+
+  it('classifies key-points and TLDR requests as summarization', async () => {
+    const result = await classifier.classify('give me the key points and a tldr of this document');
+    expect(result.domain).toBe('summarization');
+  });
+
+  // ── New domains: vision ──
+
+  it('classifies image description prompts as vision', async () => {
+    // Why: "image" (weight 5) + "describe this" (weight 5) are the top vision signals.
+    const result = await classifier.classify('describe this image in detail');
+    expect(result.domain).toBe('vision');
+  });
+
+  it('classifies screenshot analysis as vision', async () => {
+    const result = await classifier.classify('what is shown in this screenshot');
+    expect(result.domain).toBe('vision');
+  });
+
+  // ── New domains: general_chat ──
+
+  it('classifies greeting prompts as general_chat', async () => {
+    // Why: "hi" at the start of a prompt is a weight-5 general_chat signal.
+    const result = await classifier.classify('hi, can you help me today?');
+    expect(result.domain).toBe('general_chat');
+  });
+
+  it('classifies "how are you" as general_chat', async () => {
+    const result = await classifier.classify('how are you doing today?');
+    expect(result.domain).toBe('general_chat');
+  });
+
+  // ── New domains: multilingual ──
+
+  it('classifies translate requests as multilingual', async () => {
+    // Why: "translate" is a weight-5 multilingual signal.
+    const result = await classifier.classify('translate this text to French');
+    expect(result.domain).toBe('multilingual');
+  });
+
+  it('classifies "how do you say X in language" as multilingual', async () => {
+    // Why: "how do you say" + "in Spanish" both trigger weight-4/5 patterns.
+    const result = await classifier.classify('how do you say thank you in Spanish?');
+    expect(result.domain).toBe('multilingual');
   });
 
   // ── Mixed signals ──

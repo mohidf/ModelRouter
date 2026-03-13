@@ -23,6 +23,7 @@
  *   5. Weight resolution — presets and custom weights apply correctly
  *   6. Weight clamping   — invalid custom weights are rejected at both layers
  *   7. Exploration bounds — complexity constrains which tiers are eligible
+ *   8. Empty pool guard  — exploreRandom() falls back safely when registry is empty
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,9 +32,9 @@
 
 jest.mock('../providers', () => ({
   providerManager: {
-    resolve:         jest.fn(),
-    resolveExplicit: jest.fn(),
-    listProviders:   jest.fn(),
+    resolve:          jest.fn(),
+    resolveByModelId: jest.fn(),
+    listProviders:    jest.fn(),
   },
 }));
 
@@ -42,6 +43,20 @@ jest.mock('../services/performanceStore', () => ({
     getAllStats: jest.fn(),
   },
 }));
+
+// Allow tests to override MODEL_REGISTRY via modelRegistryOverride.
+// Default (null) means use the real registry from the actual module.
+let modelRegistryOverride: readonly import('../config/models').ModelDescriptor[] | null = null;
+
+jest.mock('../config/models', () => {
+  const actual = jest.requireActual<typeof import('../config/models')>('../config/models');
+  return {
+    ...actual,
+    get MODEL_REGISTRY(): readonly import('../config/models').ModelDescriptor[] {
+      return modelRegistryOverride ?? actual.MODEL_REGISTRY;
+    },
+  };
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Imports — after mocks so they receive the mocked versions
@@ -52,15 +67,16 @@ import type { PerformanceStats }                from '../services/performanceSto
 import type { ModelTier }                       from '../providers/types';
 import { providerManager }                      from '../providers';
 import { performanceStore }                     from '../services/performanceStore';
+import { MODEL_REGISTRY }                       from '../config/models';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Typed mock references — gives us autocomplete and type safety on mock methods
 // ─────────────────────────────────────────────────────────────────────────────
 
-const mockResolve         = jest.mocked(providerManager.resolve);
-const mockResolveExplicit = jest.mocked(providerManager.resolveExplicit);
-const mockListProviders   = jest.mocked(providerManager.listProviders);
-const mockGetAllStats     = jest.mocked(performanceStore.getAllStats);
+const mockResolve          = jest.mocked(providerManager.resolve);
+const mockResolveByModelId = jest.mocked(providerManager.resolveByModelId);
+const mockListProviders    = jest.mocked(providerManager.listProviders);
+const mockGetAllStats      = jest.mocked(performanceStore.getAllStats);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixtures
@@ -68,7 +84,7 @@ const mockGetAllStats     = jest.mocked(performanceStore.getAllStats);
 
 /**
  * A minimal ResolvedModel object satisfying the providerManager return type.
- * Used as the return value of resolve() and resolveExplicit() in tests that
+ * Used as the return value of resolve() and resolveByModelId() in tests that
  * don't inspect the returned model deeply.
  */
 const MOCK_RESOLVED_MODEL = {
@@ -81,6 +97,9 @@ const MOCK_RESOLVED_MODEL = {
 /**
  * Build a PerformanceStats object with sensible defaults.
  * Only override the fields your test cares about.
+ *
+ * modelId is set to `${provider}/${tier}` so exploitation tests can assert
+ * that resolveByModelId was called with the expected composite key.
  */
 function makeStat(
   provider: string,
@@ -88,6 +107,7 @@ function makeStat(
   overrides: Partial<PerformanceStats> = {},
 ): PerformanceStats {
   return {
+    modelId:           `${provider}/${tier}`,
     provider,
     tier,
     taskType:          'coding',
@@ -105,14 +125,17 @@ function makeStat(
 // ─────────────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
+  // Reset the registry override so each test sees the real MODEL_REGISTRY.
+  modelRegistryOverride = null;
+
   // Set up sensible defaults so tests that don't care about these don't fail.
   // clearMocks: true in jest.config resets call counts — we re-establish
   // return values here.
   mockResolve.mockReturnValue(MOCK_RESOLVED_MODEL);
-  mockResolveExplicit.mockReturnValue(MOCK_RESOLVED_MODEL);
+  mockResolveByModelId.mockReturnValue(MOCK_RESOLVED_MODEL);
   mockListProviders.mockReturnValue([
-    { name: 'openai',    tiers: { cheap: 'gpt-4o-mini', balanced: 'gpt-4o',            premium: 'gpt-4o'         } },
-    { name: 'anthropic', tiers: { cheap: 'claude-haiku', balanced: 'claude-sonnet-4-6', premium: 'claude-opus-4-6' } },
+    { name: 'openai',    tiers: { cheap: 'gpt-4o-mini', balanced: 'gpt-4o',             premium: 'gpt-4o'          } },
+    { name: 'anthropic', tiers: { cheap: 'claude-haiku', balanced: 'claude-sonnet-4-6',  premium: 'claude-opus-4-6' } },
   ]);
 });
 
@@ -133,7 +156,7 @@ describe('StrategyEngine — cold start', () => {
     await engine.choose('coding', 'low');
 
     expect(mockResolve).toHaveBeenCalledWith('coding', 'low');
-    expect(mockResolveExplicit).not.toHaveBeenCalled();
+    expect(mockResolveByModelId).not.toHaveBeenCalled();
   });
 
   it('returns usedFallback:true when no performance data exists', async () => {
@@ -160,8 +183,8 @@ describe('StrategyEngine — exploitation', () => {
 
   it('selects the higher-scoring candidate when exploiting', async () => {
     // Why: this is the core contract of the bandit's exploit path.
-    // The engine must call resolveExplicit with the BETTER candidate's
-    // provider and tier, not just the first one in the array.
+    // The engine must call resolveByModelId with the BETTER candidate's
+    // modelId, not just the first one in the array.
     // We put the worse candidate first to ensure sorting is actually happening.
     const worse  = makeStat('anthropic', 'premium', { averageConfidence: 0.5, averageCostUsd: 0.10, averageLatencyMs: 2000, escalationRate: 0.5 });
     const better = makeStat('openai',    'cheap',   { averageConfidence: 1.0, averageCostUsd: 0.001, averageLatencyMs: 200,  escalationRate: 0.0 });
@@ -172,9 +195,10 @@ describe('StrategyEngine — exploitation', () => {
     const engine = new StrategyEngine(0);
     await engine.choose('coding', 'low');
 
-    expect(mockResolveExplicit).toHaveBeenCalledWith(
-      'openai',
-      'cheap',
+    // exploit() calls resolveByModelId(winner.modelId, reason)
+    // winner.modelId = 'openai/cheap' (set by makeStat)
+    expect(mockResolveByModelId).toHaveBeenCalledWith(
+      better.modelId,
       expect.any(String),
     );
   });
@@ -502,60 +526,68 @@ describe('StrategyEngine — weight validation', () => {
 // Before the fix, exploreRandom() pulled from all (provider × tier) combinations
 // regardless of task complexity. A high-complexity task could be routed to the
 // cheap tier on 10% of requests, giving users a degraded response.
+//
+// exploreRandom() now samples from MODEL_REGISTRY filtered by valid tiers for
+// the given complexity. These tests verify that constraint is enforced.
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('StrategyEngine — exploration tier bounds', () => {
 
   /**
-   * Run choose() for every possible pool index, controlling Math.random()
-   * to select each entry in turn. Returns all tier arguments passed to
-   * resolveExplicit() across all those calls.
+   * Run choose() for every model in the exploration pool, controlling Math.random()
+   * to select each entry in turn. Returns all tiers of models passed to
+   * resolveByModelId() across those calls.
    *
-   * For high complexity the pool is:
-   *   [openai/balanced, openai/premium, anthropic/balanced, anthropic/premium]
-   *   (2 providers × 2 valid tiers = 4 entries)
-   * For low complexity the pool is:
-   *   [openai/cheap, openai/balanced, anthropic/cheap, anthropic/balanced]
-   *   (2 providers × 2 valid tiers = 4 entries)
+   * The pool is derived from MODEL_REGISTRY filtered by the tiers valid for
+   * the given complexity (matching the production logic in exploreRandom).
    */
-  async function collectExploredTiers(
-    complexity: 'low' | 'high',
-    poolSize: number,
-  ): Promise<string[]> {
+  async function collectExploredTiers(complexity: 'low' | 'high'): Promise<ModelTier[]> {
+    const VALID_TIERS: Record<'low' | 'high', readonly ModelTier[]> = {
+      low:  ['cheap', 'balanced'],
+      high: ['balanced', 'premium'],
+    };
+    const validTiers = VALID_TIERS[complexity];
+    // Build the same pool the production code would build
+    const pool = MODEL_REGISTRY.filter(m => (validTiers as readonly ModelTier[]).includes(m.tier));
+    const poolSize = pool.length;
+
     // epsilon=1 means exploration always fires — no need to control Math.random
-    // for the epsilon check. The spy only needs to control the pool-pick index.
+    // for the epsilon check. We control it only for the pool-pick index.
     const engine = new StrategyEngine(1);
 
     // Need at least one data point so we don't take the cold-start path
-    // (cold start calls resolve(), not resolveExplicit(), skipping exploration)
+    // (cold start calls resolve(), not resolveByModelId(), skipping exploration)
     mockGetAllStats.mockResolvedValue([makeStat('openai', 'balanced')]);
 
-    const capturedTiers: string[] = [];
-    mockResolveExplicit.mockImplementation((_providerName: string, tier: string) => {
-      capturedTiers.push(tier);
+    const capturedModelIds: string[] = [];
+    mockResolveByModelId.mockImplementation((modelId: string) => {
+      capturedModelIds.push(modelId);
       return MOCK_RESOLVED_MODEL;
     });
 
     const randomSpy = jest.spyOn(Math, 'random');
-
     for (let i = 0; i < poolSize; i++) {
-      // Math.floor(i/poolSize * poolSize) = i — selects index i from the pool
+      // epsilon check: (i/poolSize) < 1 is always true → exploration fires
+      // pool index:    Math.floor((i/poolSize) * poolSize) = i → selects index i
       randomSpy.mockReturnValue(i / poolSize);
       await engine.choose('coding', complexity);
     }
-
     randomSpy.mockRestore();
-    return capturedTiers;
+
+    // Map captured model IDs back to their tiers via MODEL_REGISTRY
+    return capturedModelIds.map(id => {
+      const descriptor = MODEL_REGISTRY.find(m => m.id === id);
+      return descriptor?.tier ?? ('unknown' as ModelTier);
+    });
   }
 
   it('never selects cheap tier during exploration for high complexity', async () => {
     // Why: routing a high-complexity prompt to the cheap tier produces a
     // shallow response. Exploration should compare providers at appropriate
     // capability levels, not degrade quality for the sake of the algorithm.
-    //
-    // Pool for high: [openai/balanced, openai/premium, anthropic/balanced, anthropic/premium]
-    const tiers = await collectExploredTiers('high', 4);
+    const tiers = await collectExploredTiers('high');
 
+    expect(tiers.length).toBeGreaterThan(0);
     expect(tiers).not.toContain('cheap');
     expect(tiers.every(t => t === 'balanced' || t === 'premium')).toBe(true);
   });
@@ -564,10 +596,9 @@ describe('StrategyEngine — exploration tier bounds', () => {
     // Why: routing a simple prompt to the premium tier wastes money.
     // A cheap/balanced model handles low-complexity prompts just as well.
     // Exploration should stay within cost-appropriate tiers.
-    //
-    // Pool for low: [openai/cheap, openai/balanced, anthropic/cheap, anthropic/balanced]
-    const tiers = await collectExploredTiers('low', 4);
+    const tiers = await collectExploredTiers('low');
 
+    expect(tiers.length).toBeGreaterThan(0);
     expect(tiers).not.toContain('premium');
     expect(tiers.every(t => t === 'cheap' || t === 'balanced')).toBe(true);
   });
@@ -575,20 +606,20 @@ describe('StrategyEngine — exploration tier bounds', () => {
   it('allows all tiers during exploration for medium complexity', async () => {
     // Why: medium complexity sits in the middle — the engine should be able
     // to explore cheap (cost discovery) and premium (quality discovery) alike.
-    //
-    // Pool for medium: [openai/cheap, openai/balanced, openai/premium, anthropic/cheap, ...]
-    // (2 providers × 3 tiers = 6 entries)
+    // Pool for medium = entire MODEL_REGISTRY (all tiers included).
+    const poolSize = MODEL_REGISTRY.length;
+
     const engine = new StrategyEngine(1);
     mockGetAllStats.mockResolvedValue([makeStat('openai', 'balanced')]);
 
-    const capturedTiers: string[] = [];
-    mockResolveExplicit.mockImplementation((_name: string, tier: string) => {
-      capturedTiers.push(tier);
+    const capturedTiers: ModelTier[] = [];
+    mockResolveByModelId.mockImplementation((modelId: string) => {
+      const descriptor = MODEL_REGISTRY.find(m => m.id === modelId);
+      if (descriptor) capturedTiers.push(descriptor.tier);
       return MOCK_RESOLVED_MODEL;
     });
 
     const randomSpy = jest.spyOn(Math, 'random');
-    const poolSize = 6; // 2 providers × 3 tiers
     for (let i = 0; i < poolSize; i++) {
       randomSpy.mockReturnValue(i / poolSize);
       await engine.choose('math', 'medium');
@@ -613,6 +644,41 @@ describe('StrategyEngine — exploration tier bounds', () => {
 
     expect(decision.explored).toBe(true);
     expect(decision.usedFallback).toBe(false);
+
+    jest.restoreAllMocks();
+  });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Empty pool guard — exploreRandom falls back safely
+//
+// If MODEL_REGISTRY is misconfigured (all models filtered out), exploreRandom()
+// must fall back to providerManager.resolve() rather than crashing on an
+// undefined index access (pool[undefined]).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('StrategyEngine — empty pool guard', () => {
+
+  it('falls back to resolve() when the exploration pool is empty', async () => {
+    // Override MODEL_REGISTRY with an empty array via the module mock getter.
+    // This simulates a misconfigured registry where no models match any tier.
+    modelRegistryOverride = [];
+
+    // Need at least one stat so the code reaches exploreRandom() (not cold-start)
+    mockGetAllStats.mockResolvedValue([makeStat('openai', 'cheap')]);
+
+    // epsilon=1 ensures exploration always fires
+    jest.spyOn(Math, 'random').mockReturnValue(0);
+    const engine = new StrategyEngine(1);
+
+    const decision = await engine.choose('coding', 'medium');
+
+    // Must fall back gracefully — no crash, and resolves via static routing
+    expect(mockResolve).toHaveBeenCalledWith('coding', 'medium');
+    expect(mockResolveByModelId).not.toHaveBeenCalled();
+    expect(decision.usedFallback).toBe(true);
+    expect(decision.explored).toBe(false);
 
     jest.restoreAllMocks();
   });
