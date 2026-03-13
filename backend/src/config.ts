@@ -7,7 +7,7 @@
 // Required env var validation — call once at startup before app.listen()
 // ---------------------------------------------------------------------------
 
-const REQUIRED_ENV_VARS = ['SUPABASE_URL', 'SUPABASE_ANON_KEY'] as const;
+const REQUIRED_ENV_VARS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'] as const;
 
 /**
  * Throws at startup if any required environment variable is absent.
@@ -38,8 +38,18 @@ function parseLogLevel(raw: string | undefined): LogLevel {
 
 function parsePositiveFloat(raw: string | undefined, fallback: number, name: string): number {
   const value = parseFloat(raw ?? String(fallback));
-  if (isNaN(value) || value <= 0) {
+  if (isNaN(value) || value < 0) {
     console.warn(`[config] Invalid ${name} "${raw}", defaulting to ${fallback}`);
+    return fallback;
+  }
+  return value;
+}
+
+/** Parse a float in [0, 1] — allows 0 (disable escalation) unlike parsePositiveFloat. */
+function parseUnitFloat(raw: string | undefined, fallback: number, name: string): number {
+  const value = parseFloat(raw ?? String(fallback));
+  if (isNaN(value) || value < 0 || value > 1) {
+    console.warn(`[config] Invalid ${name} "${raw}" (must be 0–1), defaulting to ${fallback}`);
     return fallback;
   }
   return value;
@@ -66,7 +76,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number, name: strin
 export const config = {
   port:                parseInt(process.env.PORT ?? '3000', 10),
   logLevel:            parseLogLevel(process.env.LOG_LEVEL),
-  confidenceThreshold: parsePositiveFloat(process.env.CONFIDENCE_THRESHOLD, 0.6,    'CONFIDENCE_THRESHOLD'),
+  confidenceThreshold: parseUnitFloat(process.env.CONFIDENCE_THRESHOLD, 0.6, 'CONFIDENCE_THRESHOLD'),
   defaultMaxTokens:    parsePositiveInt(  process.env.DEFAULT_MAX_TOKENS,   1024,   'DEFAULT_MAX_TOKENS'),
   bodyLimit:           process.env.REQUEST_BODY_LIMIT ?? '100kb',
   emaAlpha:            parseAlpha(process.env.EMA_ALPHA, 0.2),

@@ -61,6 +61,14 @@ app.listen(config.port, () => {
     rateLimitPerHour: config.rateLimitPerHour,
   });
 
+  // Warn early if the embedding classifier will silently fall back to rule-based.
+  if (!process.env.OPENAI_API_KEY) {
+    logger.warn(
+      'OPENAI_API_KEY is not set — embedding classifier disabled, ' +
+      'classification will use rule-based fallback only',
+    );
+  }
+
   // Pre-compute anchor embeddings in the background so the first routed
   // request does not pay initialisation latency. Failure is non-fatal —
   // HybridClassifier falls back to rule-based on any embedding error.

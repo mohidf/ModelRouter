@@ -1,9 +1,10 @@
 import { Router, type Request, type Response } from 'express';
-import type { TaskDomain } from '../providers/types';
+import { ALL_DOMAINS } from '../providers/types';
 import { performanceStore } from '../services/performanceStore';
 import { strategyEngine }   from '../services/strategyEngine';
 
-const DOMAINS: TaskDomain[] = ['coding', 'math', 'creative', 'general'];
+// Derived from the canonical ALL_DOMAINS constant — stays in sync automatically.
+const DOMAINS = ALL_DOMAINS;
 
 const router = Router();
 
@@ -22,12 +23,17 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
 
   const byTaskType: Record<string, unknown> = {};
   for (const domain of DOMAINS) {
-    const ranked = await strategyEngine.rankStats(domain);
-    byTaskType[domain] = {
-      best:      ranked[0]        ?? null,
-      bestScore: ranked[0]?.score ?? null,
-      all:       ranked,
-    };
+    try {
+      const ranked = await strategyEngine.rankStats(domain);
+      byTaskType[domain] = {
+        best:      ranked[0]        ?? null,
+        bestScore: ranked[0]?.score ?? null,
+        all:       ranked,
+      };
+    } catch {
+      // A Supabase error on one domain must not fail the entire response.
+      byTaskType[domain] = { best: null, bestScore: null, all: [] };
+    }
   }
 
   res.json({ epsilon, byTaskType });
