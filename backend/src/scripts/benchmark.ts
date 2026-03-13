@@ -2,23 +2,25 @@
 /**
  * benchmark.ts
  *
- * Runs 50 labeled prompts through the live router and measures:
- *   - Classification accuracy per domain (overall + easy/hard split)
- *   - Average latency vs GPT-4o hypothetical baseline
- *   - Cost savings vs always using GPT-4o
- *   - Escalation rate and strategy mode distribution
+ * Runs 50 diverse prompts through the live router and measures:
+ *   ① Classification accuracy — per-domain, split by easy (keyword-triggered) / hard (semantic)
+ *   ② Cost savings vs always using GPT-4o
+ *   ③ Latency — average, p50, p95, max, and per-tier breakdown
+ *   ④ Escalation rate and strategy mode distribution
+ *   ⑤ Model distribution — which models the router actually selected
  *
  * Prerequisites:
- *   - Backend running at http://localhost:3000 (or $BENCHMARK_URL)
- *   - OPENAI_API_KEY set in backend/.env
+ *   - Backend running at http://localhost:3000 (or set $BENCHMARK_URL)
+ *   - OPENAI_API_KEY in backend/.env  (embedding classifier; falls back to rule-based without it)
+ *   - At least one provider API key (ANTHROPIC_API_KEY / TOGETHER_API_KEY / OPENAI_API_KEY)
  *
  * Usage:
  *   cd backend
  *   ts-node src/scripts/benchmark.ts
  *   BENCHMARK_URL=http://staging.example.com ts-node src/scripts/benchmark.ts
  *
- * Expected runtime: ~3–6 minutes (50 sequential API calls)
- * Expected cost:    ~$0.01–0.05 (mostly cheap-tier models)
+ * Expected runtime: ~3–6 minutes (50 sequential API calls, 500 ms delay between each)
+ * Expected cost:    ~$0.01–0.05 (mostly cheap-tier Together / Haiku models)
  */
 
 // ---------------------------------------------------------------------------
@@ -26,27 +28,35 @@
 // ---------------------------------------------------------------------------
 
 const BASE_URL      = process.env.BENCHMARK_URL ?? 'http://localhost:3000';
-const MAX_TOKENS    = 256;   // short responses — we're testing routing, not generation quality
-const REQUEST_DELAY = 500;   // ms between calls — avoids hitting rate limiter (50/hr default)
+const MAX_TOKENS    = 256;   // short responses — testing routing, not generation quality
+const REQUEST_DELAY = 500;   // ms between calls — stays inside the default 50 req/hr rate limit
 
 /**
- * GPT-4o list prices used as the "always use GPT-4o" baseline.
- * These are USD per 1 M tokens as of early 2025.
+ * GPT-4o list prices (USD per 1 M tokens, early 2025) used as the
+ * "naively use GPT-4o for everything" cost baseline.
  */
 const GPT4O_INPUT_PER_1M  = 2.50;
 const GPT4O_OUTPUT_PER_1M = 10.00;
 
 // ---------------------------------------------------------------------------
-// Test suite — 50 labeled prompts
+// Test suite — 50 labeled prompts across all 11 domains
 //
 // Difficulty key:
-//   easy — contains at least one keyword from the rule-based signal table;
-//          rule-based classifier should classify this correctly on its own.
-//   hard — no domain keywords; relies on the embedding path for accuracy.
-//          If you see "hard" prompts misclassified, the embedding anchors need tuning.
+//   easy — the rule-based classifier fires at least one keyword signal;
+//          correct routing does NOT require the embedding path.
+//   hard — no domain-specific keywords; correct routing requires the embedding
+//          path (semantic similarity to anchor prompts).
+//          If hard prompts misclassify, check OPENAI_API_KEY and anchor coverage.
+//
+// Domain distribution: ~4–5 prompts per domain (2–3 easy, 2 hard)
 // ---------------------------------------------------------------------------
 
-type Domain     = 'coding' | 'math' | 'creative' | 'general';
+type Domain =
+  | 'coding' | 'coding_debug'
+  | 'math' | 'math_reasoning'
+  | 'creative' | 'general' | 'general_chat'
+  | 'research' | 'summarization' | 'vision' | 'multilingual';
+
 type Difficulty = 'easy' | 'hard';
 
 interface TestCase {
@@ -56,71 +66,129 @@ interface TestCase {
 }
 
 const TEST_CASES: TestCase[] = [
-  // ── Coding — easy (keywords: TypeScript, function, SQL, refactor, algorithm, etc.) ──
-  { prompt: 'Write a TypeScript function that sorts an array of objects by a given key',                  expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'Debug this Python error: NameError name x is not defined on line 12',                       expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'Implement a caching layer for a Node.js REST API endpoint using Redis',                      expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'What is the difference between O(n) and O(n log n) complexity in algorithms?',              expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'Write a SQL query to find all users who have not logged in for 30 days',                    expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'Refactor this JavaScript function to remove callback hell and use async/await',             expectedDomain: 'coding',   difficulty: 'easy' },
-  { prompt: 'How do I declare a TypeScript interface with optional and readonly fields?',                 expectedDomain: 'coding',   difficulty: 'easy' },
 
-  // ── Coding — hard (no keywords: crash, fault, subroutine, race condition, closure) ──
-  { prompt: 'My application keeps crashing with a null pointer when processing user input',              expectedDomain: 'coding',   difficulty: 'hard' },
-  { prompt: 'Why does my program behave differently in production compared to my local machine?',        expectedDomain: 'coding',   difficulty: 'hard' },
-  { prompt: 'There is a fault in my subroutine that produces incorrect output on large inputs',          expectedDomain: 'coding',   difficulty: 'hard' },
-  { prompt: 'Help me understand why closures capture the wrong variable value inside a loop',            expectedDomain: 'coding',   difficulty: 'hard' },
-  { prompt: 'I am seeing a race condition when two users submit the same form simultaneously',           expectedDomain: 'coding',   difficulty: 'hard' },
+  // ── coding (5) — easy: language/syntax keywords; hard: implementation described without them ──
+  { prompt: 'Write a TypeScript function that debounces API calls with configurable delay',
+    expectedDomain: 'coding', difficulty: 'easy' },
+  { prompt: 'Implement a binary search algorithm in Python that handles duplicate values',
+    expectedDomain: 'coding', difficulty: 'easy' },
+  { prompt: 'Write a SQL query using window functions to rank employees by salary within each department',
+    expectedDomain: 'coding', difficulty: 'easy' },
+  { prompt: 'I need to build a service that queues work items and processes them one at a time so they do not interfere with each other',
+    expectedDomain: 'coding', difficulty: 'hard' },
+  { prompt: 'What is the cleanest way to share state between two isolated parts of an application that do not know about each other?',
+    expectedDomain: 'coding', difficulty: 'hard' },
 
-  // ── Math — easy (keywords: solve, calculate, derivative, integral, probability, etc.) ──
-  { prompt: 'Solve the equation 3x + 7 = 22 and show your working',                                     expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'Calculate the derivative of f(x) = x cubed plus 2x',                                      expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'Prove by induction that the sum of the first n integers equals n times n plus 1 over 2',   expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'Find the eigenvalues of the 2x2 matrix with rows 4 2 and 1 3',                             expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'What is the probability of drawing two red cards in a row from a shuffled 52-card deck?',  expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'Compute the definite integral of x squared from 0 to 3',                                   expectedDomain: 'math',     difficulty: 'easy' },
-  { prompt: 'What is the standard deviation of the dataset 2 4 4 4 5 5 7 9?',                          expectedDomain: 'math',     difficulty: 'easy' },
+  // ── coding_debug (4) — easy: error/debug keywords; hard: bug described symptomatically ──
+  { prompt: 'Fix this error: TypeError: Cannot read properties of undefined (reading "map") at line 42',
+    expectedDomain: 'coding_debug', difficulty: 'easy' },
+  { prompt: 'My Python script throws a traceback: KeyError "user_id" inside the auth middleware',
+    expectedDomain: 'coding_debug', difficulty: 'easy' },
+  { prompt: 'My API returns a 200 response but the UI never updates, even though the network tab shows the correct payload arriving',
+    expectedDomain: 'coding_debug', difficulty: 'hard' },
+  { prompt: 'A job that runs every night produces correct totals on Monday but wrong ones on Friday — the inputs look identical',
+    expectedDomain: 'coding_debug', difficulty: 'hard' },
 
-  // ── Math — hard (no keywords: harmonic series, compound interest, arrangements, irrational) ──
-  { prompt: 'Verify that the harmonic series diverges to infinity',                                      expectedDomain: 'math',     difficulty: 'hard' },
-  { prompt: 'If I invest $1000 at 5 percent annual compound growth for 10 years what will I end up with?', expectedDomain: 'math',  difficulty: 'hard' },
-  { prompt: 'How many different ways can 6 people be seated around a circular table?',                   expectedDomain: 'math',     difficulty: 'hard' },
-  { prompt: 'Is the product of two irrational numbers always irrational?',                               expectedDomain: 'math',     difficulty: 'hard' },
-  { prompt: 'What is the steepest descent direction for the function f of x y equals x squared plus y squared?', expectedDomain: 'math', difficulty: 'hard' },
+  // ── math (5) — easy: symbolic keywords (solve, integral, matrix); hard: numerical without signals ──
+  { prompt: 'Solve the system of equations: 2x + 3y = 12 and x - y = 1',
+    expectedDomain: 'math', difficulty: 'easy' },
+  { prompt: 'Calculate the eigenvalues of the matrix [[3, 1], [1, 3]]',
+    expectedDomain: 'math', difficulty: 'easy' },
+  { prompt: 'Evaluate the definite integral of sin(x) from 0 to pi',
+    expectedDomain: 'math', difficulty: 'easy' },
+  { prompt: 'If I double the radius of a circle, by what factor does the area increase?',
+    expectedDomain: 'math', difficulty: 'hard' },
+  { prompt: 'What is the minimum number of moves for a knight to reach the opposite corner of an 8x8 board?',
+    expectedDomain: 'math', difficulty: 'hard' },
 
-  // ── Creative — easy (keywords: write+story, haiku, poem, dialogue, essay, screenplay, etc.) ──
-  { prompt: 'Write a short story about a lighthouse keeper who discovers a message in a bottle',         expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Compose a haiku about the transition from winter to spring',                                expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Write a poem about the feeling of standing at the edge of the ocean at night',              expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Create a dialogue between two characters arguing about whether to leave their hometown',    expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Write a persuasive essay arguing that public libraries are essential to society',           expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Draft a short screenplay scene where two strangers meet during a city-wide blackout',       expectedDomain: 'creative', difficulty: 'easy' },
-  { prompt: 'Describe the character arc of someone who spent 30 years as a lighthouse keeper',          expectedDomain: 'creative', difficulty: 'easy' },
+  // ── math_reasoning (4) — easy: step-by-step / word problem phrases; hard: pure reasoning scenario ──
+  { prompt: 'A store sells 3 items at $4 each and 5 items at $7 each. Show step by step how to find the total revenue',
+    expectedDomain: 'math_reasoning', difficulty: 'easy' },
+  { prompt: 'There are 8 runners in a race. How many ways can first, second, and third place be awarded?',
+    expectedDomain: 'math_reasoning', difficulty: 'easy' },
+  { prompt: 'A pipe fills a tank in 4 hours and another drains it in 6 hours. If both are open, when is the tank full?',
+    expectedDomain: 'math_reasoning', difficulty: 'hard' },
+  { prompt: 'Two towns are 120 miles apart. A car leaves each town towards the other at the same time at different speeds. Where do they meet?',
+    expectedDomain: 'math_reasoning', difficulty: 'hard' },
 
-  // ── Creative — hard (no keywords: tale, narrate, capture, touching, something about) ──
-  { prompt: 'Tell me a tale about a lone astronaut who discovers a faint signal from deep space',        expectedDomain: 'creative', difficulty: 'hard' },
-  { prompt: 'I want to capture the bittersweet feeling of leaving home for the first time in words',    expectedDomain: 'creative', difficulty: 'hard' },
-  { prompt: 'Narrate the life of an old lighthouse through the eyes of its light',                       expectedDomain: 'creative', difficulty: 'hard' },
-  { prompt: 'Give me something that feels both hopeful and melancholic about the passage of time',      expectedDomain: 'creative', difficulty: 'hard' },
-  { prompt: 'Craft something touching about a grandfather passing down his pocket watch to his grandson', expectedDomain: 'creative', difficulty: 'hard' },
+  // ── creative (5) — easy: write+form keywords; hard: implicit creative request ──
+  { prompt: 'Write a short story about a retired astronaut who starts receiving messages from her old spacecraft',
+    expectedDomain: 'creative', difficulty: 'easy' },
+  { prompt: 'Compose a haiku capturing the exact moment just before a thunderstorm breaks',
+    expectedDomain: 'creative', difficulty: 'easy' },
+  { prompt: 'Draft a dialogue between a museum painting and the last visitor before closing time',
+    expectedDomain: 'creative', difficulty: 'easy' },
+  { prompt: 'Give me something that captures the strange loneliness of being the only person awake in a sleeping house',
+    expectedDomain: 'creative', difficulty: 'hard' },
+  { prompt: 'Tell me a tale about a cartographer who discovers her maps are changing overnight',
+    expectedDomain: 'creative', difficulty: 'hard' },
 
-  // ── General — easy (clearly factual, no domain signals) ──
-  { prompt: 'What is the capital of New Zealand?',                                                       expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'Who was Marie Curie and what did she discover?',                                            expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'What are the main symptoms of influenza?',                                                  expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'What time zone is Tokyo in relative to UTC?',                                               expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'When did the Second World War officially end?',                                             expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'What is the difference between a virus and a bacterium?',                                   expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'Why do leaves change color in autumn?',                                                     expectedDomain: 'general',  difficulty: 'easy' },
-  { prompt: 'What causes earthquakes and where do they most commonly occur?',                            expectedDomain: 'general',  difficulty: 'easy' },
+  // ── general (5) — easy: clear factual Q&A; hard: nuanced questions that could confuse other domains ──
+  { prompt: 'What is the capital of Argentina and what is it most famous for?',
+    expectedDomain: 'general', difficulty: 'easy' },
+  { prompt: 'Who was Ada Lovelace and why is she significant in the history of computing?',
+    expectedDomain: 'general', difficulty: 'easy' },
+  { prompt: 'What causes the Northern Lights and where is the best place to see them?',
+    expectedDomain: 'general', difficulty: 'easy' },
+  { prompt: 'Why do some countries drive on the left side of the road?',
+    expectedDomain: 'general', difficulty: 'hard' },
+  { prompt: 'How does the economy of a country recover after a major natural disaster?',
+    expectedDomain: 'general', difficulty: 'hard' },
 
-  // ── General — hard (easily confused with other domains) ──
-  { prompt: 'Explain how neural networks learn to recognize patterns in data',                           expectedDomain: 'general',  difficulty: 'hard' },
-  { prompt: 'What is the best sustainable approach to losing weight?',                                   expectedDomain: 'general',  difficulty: 'hard' },
-  { prompt: 'How does the human brain form and store long-term memories?',                               expectedDomain: 'general',  difficulty: 'hard' },
-  { prompt: 'What makes a good leader during a crisis?',                                                 expectedDomain: 'general',  difficulty: 'hard' },
-  { prompt: 'How do vaccines train the immune system to fight future infections?',                       expectedDomain: 'general',  difficulty: 'hard' },
-  { prompt: 'What events during the French Revolution changed the course of European history?',          expectedDomain: 'general',  difficulty: 'hard' },
+  // ── general_chat (4) — easy: greeting openers; hard: casual conversation without greeting ──
+  { prompt: 'Hi! I just wanted to say your explanations have been really helpful, thank you',
+    expectedDomain: 'general_chat', difficulty: 'easy' },
+  { prompt: 'Hey, quick question — do you have a favourite type of music?',
+    expectedDomain: 'general_chat', difficulty: 'easy' },
+  { prompt: 'I have been thinking about picking up a new hobby, any thoughts on what might be fun?',
+    expectedDomain: 'general_chat', difficulty: 'hard' },
+  { prompt: 'Can you recommend something good to watch this weekend? I am in the mood for something surprising',
+    expectedDomain: 'general_chat', difficulty: 'hard' },
+
+  // ── research (5) — easy: research/journal/compare keywords; hard: analytical without vocabulary ──
+  { prompt: 'Summarize the current research on the effects of sleep deprivation on cognitive performance',
+    expectedDomain: 'research', difficulty: 'easy' },
+  { prompt: 'What does the peer-reviewed literature say about the long-term effectiveness of mindfulness therapy?',
+    expectedDomain: 'research', difficulty: 'easy' },
+  { prompt: 'Compare and analyze the evidence for and against intermittent fasting as a weight-loss intervention',
+    expectedDomain: 'research', difficulty: 'easy' },
+  { prompt: 'What do we know about why some cities successfully reduced car usage and others failed despite similar policies?',
+    expectedDomain: 'research', difficulty: 'hard' },
+  { prompt: 'Give me a balanced look at whether remote work is genuinely more productive than office work, and what the disagreements are',
+    expectedDomain: 'research', difficulty: 'hard' },
+
+  // ── summarization (4) — easy: summarize/tldr/key points; hard: compression request without those words ──
+  { prompt: 'Summarize the key points of this article: [paste long text here]',
+    expectedDomain: 'summarization', difficulty: 'easy' },
+  { prompt: 'Give me a TL;DR of the major events of the French Revolution in five bullet points',
+    expectedDomain: 'summarization', difficulty: 'easy' },
+  { prompt: 'I just sat through a two-hour meeting — can you condense these notes into the three decisions we actually made?',
+    expectedDomain: 'summarization', difficulty: 'hard' },
+  { prompt: 'Take this five-page contract and pull out only the parts that would affect me if I wanted to cancel early',
+    expectedDomain: 'summarization', difficulty: 'hard' },
+
+  // ── vision (4) — easy: image/photo/screenshot keywords; hard: visual analysis without those words ──
+  { prompt: 'Describe what is shown in this image in as much detail as possible',
+    expectedDomain: 'vision', difficulty: 'easy' },
+  { prompt: 'What text can you read in this screenshot and what does the UI seem to be doing?',
+    expectedDomain: 'vision', difficulty: 'easy' },
+  { prompt: 'Look at this diagram and tell me whether the flow it describes makes logical sense',
+    expectedDomain: 'vision', difficulty: 'hard' },
+  { prompt: 'Can you identify what kind of document this appears to be and extract the key figures from it?',
+    expectedDomain: 'vision', difficulty: 'hard' },
+
+  // ── multilingual (5) — easy: translate/language keywords; hard: language-related without "translate" ──
+  { prompt: 'Translate the following paragraph from English to formal Spanish',
+    expectedDomain: 'multilingual', difficulty: 'easy' },
+  { prompt: 'How do you say "I would like a table for two, please" in French and in Italian?',
+    expectedDomain: 'multilingual', difficulty: 'easy' },
+  { prompt: 'What is the German word for the feeling of coziness and warmth you get from being inside on a cold day?',
+    expectedDomain: 'multilingual', difficulty: 'easy' },
+  { prompt: 'I am learning Japanese and struggling with the difference between は and が — can you explain it clearly?',
+    expectedDomain: 'multilingual', difficulty: 'hard' },
+  { prompt: 'Why do some languages have gendered nouns and others do not — is there a historical explanation?',
+    expectedDomain: 'multilingual', difficulty: 'hard' },
+
 ];
 
 // ---------------------------------------------------------------------------
@@ -173,10 +241,10 @@ async function routePrompt(prompt: string): Promise<RouteResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Cost helpers
+// Cost helper
 // ---------------------------------------------------------------------------
 
-/** Estimate what this call would have cost on GPT-4o. */
+/** Estimate what this call would have cost if routed to GPT-4o every time. */
 function estimateGpt4oCost(estimatedInputTokens: number, responseText: string): number {
   const outputTokens = Math.ceil(responseText.length / 4);
   return (estimatedInputTokens * GPT4O_INPUT_PER_1M + outputTokens * GPT4O_OUTPUT_PER_1M) / 1_000_000;
@@ -187,13 +255,18 @@ function estimateGpt4oCost(estimatedInputTokens: number, responseText: string): 
 // ---------------------------------------------------------------------------
 
 function pct(n: number, d: number): string {
-  if (d === 0) return '  —  ';
+  if (d === 0) return '   —  ';
   return `${((n / d) * 100).toFixed(1)}%`;
 }
 
 function usd(n: number): string {
-  if (n < 0.0001) return `$${(n * 1000).toFixed(4)}m`; // show in milli-cents
+  if (n < 0.0001) return `$${(n * 1_000_000).toFixed(1)}µ`; // micro-dollars
+  if (n < 0.01)   return `$${n.toFixed(5)}`;
   return `$${n.toFixed(4)}`;
+}
+
+function ms(n: number): string {
+  return n === 0 ? '  —' : `${Math.round(n)}ms`;
 }
 
 function pad(s: string | number, width: number, right = false): string {
@@ -201,15 +274,7 @@ function pad(s: string | number, width: number, right = false): string {
   return right ? str.padStart(width) : str.padEnd(width);
 }
 
-function hr(char = '─', width = 78): string { return char.repeat(width); }
-
-function row(...cols: Array<{ text: string | number; width: number; right?: boolean }>): string {
-  return '│ ' + cols.map(c => pad(c.text, c.width, c.right)).join(' │ ') + ' │';
-}
-
-function headerRow(...cols: Array<{ text: string; width: number }>): string {
-  return '│ ' + cols.map(c => pad(c.text, c.width)).join(' │ ') + ' │';
-}
+function hr(char = '─', width = 90): string { return char.repeat(width); }
 
 // ---------------------------------------------------------------------------
 // Delay helper
@@ -239,10 +304,9 @@ async function checkServer(): Promise<void> {
 
 async function runBenchmark(): Promise<void> {
   console.log('\n' + hr('═'));
-  console.log('  ModelRouter Benchmark — 50 prompts');
-  console.log(`  Target: ${BASE_URL}`);
-  console.log(`  Max tokens per request: ${MAX_TOKENS}`);
-  console.log(`  Estimated cost: ~$0.01–0.05  |  Estimated time: 3–6 min`);
+  console.log('  ModelRouter AI Benchmark — 50 prompts across 11 domains');
+  console.log(`  Target: ${BASE_URL}   Max tokens: ${MAX_TOKENS}   Delay: ${REQUEST_DELAY}ms`);
+  console.log('  Columns: [seq] DIFFICULTY domain  ›  prompt (55 chars)  RESULT  latency  cost');
   console.log(hr('═'));
   console.log();
 
@@ -252,11 +316,15 @@ async function runBenchmark(): Promise<void> {
   const startTime = Date.now();
 
   for (let i = 0; i < TEST_CASES.length; i++) {
-    const tc = TEST_CASES[i];
+    const tc  = TEST_CASES[i];
     const idx = String(i + 1).padStart(2, '0');
     const tag = `[${idx}/${TEST_CASES.length}]`;
+    const domainLabel = tc.expectedDomain.padEnd(14);
 
-    process.stdout.write(`${tag} ${tc.difficulty.toUpperCase()} ${tc.expectedDomain.padEnd(8)} › ${tc.prompt.slice(0, 55).padEnd(55)} `);
+    process.stdout.write(
+      `${tag} ${tc.difficulty.toUpperCase().padEnd(4)} ${domainLabel} › ` +
+      `${tc.prompt.slice(0, 50).padEnd(50)} `
+    );
 
     try {
       const rr = await routePrompt(tc.prompt);
@@ -279,8 +347,11 @@ async function runBenchmark(): Promise<void> {
         correct,
       });
 
-      const mark = correct ? '✓' : `✗ (got ${actualDomain})`;
-      process.stdout.write(`${mark}  ${rr.latencyMs}ms  ${usd(rr.totalCostUsd)}\n`);
+      const mark = correct
+        ? '✓'
+        : `✗→${actualDomain.slice(0, 10)}`;
+      process.stdout.write(`${mark.padEnd(14)}  ${String(rr.latencyMs).padStart(6)}ms  ${usd(rr.totalCostUsd)}\n`);
+
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       results.push({
@@ -289,7 +360,8 @@ async function runBenchmark(): Promise<void> {
         actualCostUsd: 0, gpt4oCostUsd: 0, strategyMode: 'error',
         correct: false, error: msg,
       });
-      process.stdout.write(`ERROR: ${msg.slice(0, 40)}\n`);
+      process.stdout.write(`ERROR\n`);
+      console.error(`         ↳ ${msg}`);
     }
 
     if (i < TEST_CASES.length - 1) await sleep(REQUEST_DELAY);
@@ -304,9 +376,14 @@ async function runBenchmark(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function printSummary(results: BenchmarkResult[], wallMs: number): void {
-  const W = 78;
-  const domains:     Domain[]     = ['coding', 'math', 'creative', 'general'];
-  const difficulties: Difficulty[] = ['easy', 'hard'];
+  const W = 90;
+
+  const ALL_DOMAINS: Domain[] = [
+    'coding', 'coding_debug',
+    'math', 'math_reasoning',
+    'creative', 'general', 'general_chat',
+    'research', 'summarization', 'vision', 'multilingual',
+  ];
 
   // ── Derived sets ──────────────────────────────────────────────────────────
   const valid     = results.filter(r => !r.error);
@@ -318,15 +395,12 @@ function printSummary(results: BenchmarkResult[], wallMs: number): void {
   const totalGpt4o  = valid.reduce((s, r) => s + r.gpt4oCostUsd,  0);
   const savingsPct  = totalGpt4o > 0 ? ((totalGpt4o - totalActual) / totalGpt4o) * 100 : 0;
 
-  const avgLatency  = valid.length > 0
-    ? valid.reduce((s, r) => s + r.latencyMs, 0) / valid.length
-    : 0;
+  const avgLatency = valid.length > 0
+    ? valid.reduce((s, r) => s + r.latencyMs, 0) / valid.length : 0;
 
-  // Mode counts
   const modeCounts: Record<string, number> = {};
   for (const r of valid) modeCounts[r.strategyMode] = (modeCounts[r.strategyMode] ?? 0) + 1;
 
-  // Tier counts
   const tierCounts: Record<string, number> = {};
   for (const r of valid) tierCounts[r.tier] = (tierCounts[r.tier] ?? 0) + 1;
 
@@ -334,160 +408,300 @@ function printSummary(results: BenchmarkResult[], wallMs: number): void {
   console.log('  BENCHMARK SUMMARY');
   console.log(hr('═', W));
 
-  // ── 1. Classification accuracy ───────────────────────────────────────────
+  // ── ① Classification accuracy ─────────────────────────────────────────────
   console.log('\n  ① Classification Accuracy\n');
-  console.log('  ┌──────────────┬────────┬────────────┬────────────┬────────────┐');
-  console.log('  │ Domain       │  Total │  Correct   │  Accuracy  │ Easy / Hard│');
-  console.log('  ├──────────────┼────────┼────────────┼────────────┼────────────┤');
+  console.log('  ┌──────────────────┬───────┬─────────┬──────────┬──────────────┬──────────────┐');
+  console.log('  │ Domain           │ Cases │ Correct │ Accuracy │  Easy        │  Hard        │');
+  console.log('  ├──────────────────┼───────┼─────────┼──────────┼──────────────┼──────────────┤');
 
-  for (const domain of domains) {
-    const domainResults = valid.filter(r => r.testCase.expectedDomain === domain);
-    const domCorrect    = domainResults.filter(r => r.correct);
+  for (const domain of ALL_DOMAINS) {
+    const dr = valid.filter(r => r.testCase.expectedDomain === domain);
+    if (dr.length === 0) continue;
 
-    const easyTotal   = domainResults.filter(r => r.testCase.difficulty === 'easy').length;
-    const easyCorrect = domainResults.filter(r => r.testCase.difficulty === 'easy' && r.correct).length;
-    const hardTotal   = domainResults.filter(r => r.testCase.difficulty === 'hard').length;
-    const hardCorrect = domainResults.filter(r => r.testCase.difficulty === 'hard' && r.correct).length;
-
-    const easyHardStr = `${pct(easyCorrect, easyTotal)} / ${pct(hardCorrect, hardTotal)}`;
+    const dcorrect     = dr.filter(r => r.correct).length;
+    const easyTotal    = dr.filter(r => r.testCase.difficulty === 'easy').length;
+    const easyCorrect  = dr.filter(r => r.testCase.difficulty === 'easy' && r.correct).length;
+    const hardTotal    = dr.filter(r => r.testCase.difficulty === 'hard').length;
+    const hardCorrect  = dr.filter(r => r.testCase.difficulty === 'hard' && r.correct).length;
+    const accStr       = pct(dcorrect, dr.length);
+    const easyStr      = `${easyCorrect}/${easyTotal} (${pct(easyCorrect, easyTotal).trim()})`;
+    const hardStr      = `${hardCorrect}/${hardTotal} (${pct(hardCorrect, hardTotal).trim()})`;
 
     console.log(
-      `  │ ${pad(domain, 12)} │ ${pad(domainResults.length, 6, true)} │ ` +
-      `${pad(domCorrect.length, 10, true)} │ ` +
-      `${pad(pct(domCorrect.length, domainResults.length), 10, true)} │ ` +
-      `${pad(easyHardStr, 10, true)} │`
+      `  │ ${pad(domain, 16)} │ ${pad(dr.length, 5, true)} │ ` +
+      `${pad(dcorrect, 7, true)} │ ${pad(accStr, 8, true)} │ ` +
+      `${pad(easyStr, 12, true)} │ ${pad(hardStr, 12, true)} │`
     );
   }
 
-  console.log('  ├──────────────┼────────┼────────────┼────────────┼────────────┤');
+  console.log('  ├──────────────────┼───────┼─────────┼──────────┼──────────────┼──────────────┤');
   console.log(
-    `  │ ${'TOTAL'.padEnd(12)} │ ${pad(valid.length, 6, true)} │ ` +
-    `${pad(correct.length, 10, true)} │ ` +
-    `${pad(pct(correct.length, valid.length), 10, true)} │ ` +
-    `${pad('', 10)} │`
+    `  │ ${'TOTAL'.padEnd(16)} │ ${pad(valid.length, 5, true)} │ ` +
+    `${pad(correct.length, 7, true)} │ ${pad(pct(correct.length, valid.length), 8, true)} │ ` +
+    `${''.padEnd(12)} │ ${''.padEnd(12)} │`
   );
-  console.log('  └──────────────┴────────┴────────────┴────────────┴────────────┘');
+  console.log('  └──────────────────┴───────┴─────────┴──────────┴──────────────┴──────────────┘');
 
-  // ── 2. Misclassifications ────────────────────────────────────────────────
+  // ── ② Misclassifications ──────────────────────────────────────────────────
   const wrong = valid.filter(r => !r.correct);
-  if (wrong.length > 0) {
-    console.log('\n  ② Misclassified Prompts\n');
+  console.log('\n  ② Misclassifications\n');
+  if (wrong.length === 0) {
+    console.log('  None — 100% classification accuracy\n');
+  } else {
     for (const r of wrong) {
       const diff = r.testCase.difficulty.toUpperCase();
-      console.log(`  [${diff}] Expected ${r.testCase.expectedDomain.padEnd(8)} → got ${r.actualDomain.padEnd(8)} (conf: ${r.confidence.toFixed(2)})`);
-      console.log(`        "${r.testCase.prompt.slice(0, 70)}"`);
+      const conf = `conf ${r.confidence.toFixed(2)}`;
+      console.log(
+        `  [${diff}] ${r.testCase.expectedDomain.padEnd(14)} → ${r.actualDomain.padEnd(14)} ${conf}`
+      );
+      console.log(`        "${r.testCase.prompt.slice(0, 75)}"`);
     }
-  } else {
-    console.log('\n  ② Misclassified Prompts\n');
-    console.log('  None — 100% accuracy');
   }
 
-  // ── 3. Cost ──────────────────────────────────────────────────────────────
+  // ── ③ Cost breakdown ──────────────────────────────────────────────────────
   console.log('\n  ③ Cost vs GPT-4o Baseline\n');
-  console.log('  ┌──────────────────────────────────┬───────────────┐');
-  console.log('  │ Metric                           │         Value │');
-  console.log('  ├──────────────────────────────────┼───────────────┤');
-  console.log(`  │ ${'Total actual cost'.padEnd(32)} │ ${usd(totalActual).padStart(13)} │`);
-  console.log(`  │ ${'Hypothetical GPT-4o cost'.padEnd(32)} │ ${usd(totalGpt4o).padStart(13)} │`);
-  console.log(`  │ ${'Savings vs GPT-4o'.padEnd(32)} │ ${`${savingsPct.toFixed(1)}%`.padStart(13)} │`);
-  console.log(`  │ ${'Cost per request (avg)'.padEnd(32)} │ ${usd(totalActual / Math.max(valid.length, 1)).padStart(13)} │`);
-  console.log('  └──────────────────────────────────┴───────────────┘');
+  console.log('  ┌──────────────────────────────────────┬───────────────┐');
+  console.log('  │ Metric                               │         Value │');
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
+  console.log(`  │ ${'Total actual cost (all 50 prompts)'.padEnd(36)} │ ${usd(totalActual).padStart(13)} │`);
+  console.log(`  │ ${'Hypothetical GPT-4o cost'.padEnd(36)} │ ${usd(totalGpt4o).padStart(13)} │`);
+  console.log(`  │ ${'Savings vs GPT-4o'.padEnd(36)} │ ${`${savingsPct.toFixed(1)}%`.padStart(13)} │`);
+  console.log(`  │ ${'Cost per request (avg)'.padEnd(36)} │ ${usd(totalActual / Math.max(valid.length, 1)).padStart(13)} │`);
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
 
-  // ── 4. Latency ───────────────────────────────────────────────────────────
-  const latencies   = valid.map(r => r.latencyMs).sort((a, b) => a - b);
-  const p50         = latencies[Math.floor(latencies.length * 0.50)] ?? 0;
-  const p95         = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
-  const maxLatency  = latencies[latencies.length - 1] ?? 0;
+  for (const tier of ['cheap', 'balanced', 'premium'] as const) {
+    const tierResults = valid.filter(r => r.tier === tier);
+    if (tierResults.length === 0) continue;
+    const tierCost = tierResults.reduce((s, r) => s + r.actualCostUsd, 0);
+    const tierAvg  = tierCost / tierResults.length;
+    const label    = `Avg cost — ${tier} tier (${tierResults.length} calls)`;
+    console.log(`  │ ${pad(label, 36)} │ ${usd(tierAvg).padStart(13)} │`);
+  }
+
+  console.log('  └──────────────────────────────────────┴───────────────┘');
+
+  // ── ④ Latency ─────────────────────────────────────────────────────────────
+  const latencies  = valid.map(r => r.latencyMs).sort((a, b) => a - b);
+  const p50        = latencies[Math.floor(latencies.length * 0.50)] ?? 0;
+  const p95        = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
+  const maxLat     = latencies[latencies.length - 1] ?? 0;
 
   console.log('\n  ④ Latency\n');
-  console.log('  ┌──────────────────────────────────┬───────────────┐');
-  console.log('  │ Metric                           │         Value │');
-  console.log('  ├──────────────────────────────────┼───────────────┤');
-  console.log(`  │ ${'Average'.padEnd(32)} │ ${`${avgLatency.toFixed(0)} ms`.padStart(13)} │`);
-  console.log(`  │ ${'p50'.padEnd(32)} │ ${`${p50} ms`.padStart(13)} │`);
-  console.log(`  │ ${'p95'.padEnd(32)} │ ${`${p95} ms`.padStart(13)} │`);
-  console.log(`  │ ${'Max'.padEnd(32)} │ ${`${maxLatency} ms`.padStart(13)} │`);
-  console.log(`  │ ${'Total wall time'.padEnd(32)} │ ${`${(wallMs / 1000).toFixed(1)} s`.padStart(13)} │`);
-  console.log('  └──────────────────────────────────┴───────────────┘');
+  console.log('  ┌──────────────────────────────────────┬───────────────┐');
+  console.log('  │ Metric                               │         Value │');
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
+  console.log(`  │ ${'Average'.padEnd(36)} │ ${ms(avgLatency).padStart(13)} │`);
+  console.log(`  │ ${'Median (p50)'.padEnd(36)} │ ${ms(p50).padStart(13)} │`);
+  console.log(`  │ ${'p95'.padEnd(36)} │ ${ms(p95).padStart(13)} │`);
+  console.log(`  │ ${'Max'.padEnd(36)} │ ${ms(maxLat).padStart(13)} │`);
+  console.log(`  │ ${'Total wall time'.padEnd(36)} │ ${`${(wallMs / 1000).toFixed(1)} s`.padStart(13)} │`);
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
 
-  // ── 5. Escalation + strategy ─────────────────────────────────────────────
+  for (const tier of ['cheap', 'balanced', 'premium'] as const) {
+    const tierResults = valid.filter(r => r.tier === tier);
+    if (tierResults.length === 0) continue;
+    const tierAvg = tierResults.reduce((s, r) => s + r.latencyMs, 0) / tierResults.length;
+    const label   = `Avg latency — ${tier} tier`;
+    console.log(`  │ ${pad(label, 36)} │ ${ms(tierAvg).padStart(13)} │`);
+  }
+
+  console.log('  └──────────────────────────────────────┴───────────────┘');
+
+  // ── ⑤ Routing behaviour ───────────────────────────────────────────────────
   console.log('\n  ⑤ Routing Behaviour\n');
-  console.log('  ┌──────────────────────────────────┬───────────────┐');
-  console.log('  │ Metric                           │         Value │');
-  console.log('  ├──────────────────────────────────┼───────────────┤');
-  console.log(`  │ ${'Escalation rate'.padEnd(32)} │ ${pct(escalated.length, valid.length).padStart(13)} │`);
+  console.log('  ┌──────────────────────────────────────┬───────────────┐');
+  console.log('  │ Metric                               │         Value │');
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
+  console.log(`  │ ${'Escalation rate'.padEnd(36)} │ ${pct(escalated.length, valid.length).padStart(13)} │`);
+
   for (const mode of ['exploitation', 'exploration', 'fallback']) {
     const count = modeCounts[mode] ?? 0;
-    console.log(`  │ ${`Strategy: ${mode}`.padEnd(32)} │ ${`${count} (${pct(count, valid.length)})`.padStart(13)} │`);
+    console.log(`  │ ${`Strategy: ${mode}`.padEnd(36)} │ ${`${count} (${pct(count, valid.length)})`.padStart(13)} │`);
   }
-  console.log('  ├──────────────────────────────────┼───────────────┤');
+
+  console.log('  ├──────────────────────────────────────┼───────────────┤');
+
   for (const tier of ['cheap', 'balanced', 'premium']) {
     const count = tierCounts[tier] ?? 0;
-    console.log(`  │ ${`Tier: ${tier}`.padEnd(32)} │ ${`${count} (${pct(count, valid.length)})`.padStart(13)} │`);
+    console.log(`  │ ${`Tier: ${tier}`.padEnd(36)} │ ${`${count} (${pct(count, valid.length)})`.padStart(13)} │`);
   }
+
   if (errored.length > 0) {
-    console.log('  ├──────────────────────────────────┼───────────────┤');
-    console.log(`  │ ${'Errored requests'.padEnd(32)} │ ${String(errored.length).padStart(13)} │`);
+    console.log('  ├──────────────────────────────────────┼───────────────┤');
+    console.log(`  │ ${'Errored requests'.padEnd(36)} │ ${String(errored.length).padStart(13)} │`);
   }
-  console.log('  └──────────────────────────────────┴───────────────┘');
+
+  console.log('  └──────────────────────────────────────┴───────────────┘');
+
+  // ── ⑥ Model distribution ─────────────────────────────────────────────────
+  // Short display names so the table fits the terminal width
+  const MODEL_SHORT: Record<string, string> = {
+    'gpt-4o-mini':                                   'GPT-4o mini',
+    'gpt-4o':                                        'GPT-4o',
+    'claude-haiku-4-5-20251001':                     'Claude Haiku',
+    'claude-sonnet-4-6':                             'Claude Sonnet',
+    'claude-opus-4-6':                               'Claude Opus',
+    // Together AI — serverless (Turbo) variants in active registry
+    'Qwen/Qwen2.5-7B-Instruct-Turbo':               'Qwen 2.5 7B Turbo',
+    'Qwen/Qwen2.5-72B-Instruct-Turbo':              'Qwen 2.5 72B Turbo',
+    'meta-llama/Llama-3.3-70B-Instruct-Turbo':      'Llama 3.3 70B Turbo',
+    'meta-llama/Llama-4-Maverick-17B-128E-Instruct': 'Llama 4 Maverick',
+    'deepseek-ai/DeepSeek-V3':                       'DeepSeek V3',
+  };
+
+  const modelCounts: Record<string, { calls: number; tier: string; totalCost: number; totalLatency: number }> = {};
+  for (const r of valid) {
+    if (!r.model) continue;
+    const entry = modelCounts[r.model] ?? { calls: 0, tier: r.tier, totalCost: 0, totalLatency: 0 };
+    entry.calls++;
+    entry.totalCost    += r.actualCostUsd;
+    entry.totalLatency += r.latencyMs;
+    modelCounts[r.model] = entry;
+  }
+
+  const sortedModels = Object.entries(modelCounts).sort((a, b) => b[1].calls - a[1].calls);
+
+  if (sortedModels.length > 0) {
+    console.log('\n  ⑥ Model Distribution\n');
+    console.log('  ┌────────────────────┬──────────┬───────┬──────────────┬──────────────┐');
+    console.log('  │ Model              │ Tier     │ Calls │  Avg Latency │    Avg Cost  │');
+    console.log('  ├────────────────────┼──────────┼───────┼──────────────┼──────────────┤');
+
+    for (const [modelId, data] of sortedModels) {
+      const shortName  = MODEL_SHORT[modelId] ?? modelId.split('/').pop() ?? modelId;
+      const avgLatency = data.totalLatency / data.calls;
+      const avgCost    = data.totalCost    / data.calls;
+      const pctCalls   = `${data.calls} (${((data.calls / valid.length) * 100).toFixed(0)}%)`;
+
+      console.log(
+        `  │ ${pad(shortName.slice(0, 18), 18)} │ ${pad(data.tier, 8)} │ ` +
+        `${pad(pctCalls, 5, true)} │ ${ms(avgLatency).padStart(12)} │ ${usd(avgCost).padStart(12)} │`
+      );
+    }
+
+    console.log('  └────────────────────┴──────────┴───────┴──────────────┴──────────────┘');
+  }
 
   // ── Interpretation guide ─────────────────────────────────────────────────
-  printInterpretation(correct.length, valid.length, savingsPct, escalated.length, valid.length);
+  printInterpretation({
+    correctCount:   correct.length,
+    totalCount:     valid.length,
+    savingsPct,
+    escalatedCount: escalated.length,
+    avgLatencyMs:   avgLatency,
+    p95LatencyMs:   p95,
+    easyCorrect:    valid.filter(r => r.testCase.difficulty === 'easy' && r.correct).length,
+    easyTotal:      valid.filter(r => r.testCase.difficulty === 'easy').length,
+    hardCorrect:    valid.filter(r => r.testCase.difficulty === 'hard' && r.correct).length,
+    hardTotal:      valid.filter(r => r.testCase.difficulty === 'hard').length,
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Interpretation guide
 // ---------------------------------------------------------------------------
 
-function printInterpretation(
-  correctCount: number,
-  totalCount:   number,
-  savingsPct:   number,
-  escalatedCount: number,
-  validCount:   number,
-): void {
-  const accuracy    = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
-  const escalPct    = validCount > 0 ? (escalatedCount / validCount) * 100 : 0;
+interface InterpretationParams {
+  correctCount:   number;
+  totalCount:     number;
+  savingsPct:     number;
+  escalatedCount: number;
+  avgLatencyMs:   number;
+  p95LatencyMs:   number;
+  easyCorrect:    number;
+  easyTotal:      number;
+  hardCorrect:    number;
+  hardTotal:      number;
+}
 
-  console.log('\n  ─────────────────────────────────────────────────────────────────────────');
+function printInterpretation(p: InterpretationParams): void {
+  const accuracy  = p.totalCount   > 0 ? (p.correctCount   / p.totalCount)   * 100 : 0;
+  const escalPct  = p.totalCount   > 0 ? (p.escalatedCount / p.totalCount)   * 100 : 0;
+  const easyAcc   = p.easyTotal    > 0 ? (p.easyCorrect    / p.easyTotal)    * 100 : 0;
+  const hardAcc   = p.hardTotal    > 0 ? (p.hardCorrect    / p.hardTotal)    * 100 : 0;
+
+  console.log('\n  ══════════════════════════════════════════════════════════════════════════════════');
   console.log('  HOW TO INTERPRET THESE RESULTS');
-  console.log('  ─────────────────────────────────────────────────────────────────────────');
+  console.log('  ══════════════════════════════════════════════════════════════════════════════════');
 
-  // Accuracy
+  // ── Accuracy ──────────────────────────────────────────────────────────────
   const accStatus =
-    accuracy >= 90 ? '✓ EXCELLENT' :
-    accuracy >= 80 ? '~ GOOD' :
-    accuracy >= 65 ? '△ FAIR — embedding anchors may need tuning' :
-                     '✗ POOR — check OPENAI_API_KEY and anchor prompts';
-  console.log(`\n  Accuracy ${accuracy.toFixed(1)}%  →  ${accStatus}`);
-  console.log('    ≥ 90%  Hybrid classifier working as designed.');
-  console.log('    80–90% Acceptable. Review misclassified "hard" prompts.');
-  console.log('    65–80% Embedding path underperforming. Diversify anchor examples.');
-  console.log('    < 65%  Likely no OPENAI_API_KEY — all calls fell back to rule-based.');
+    accuracy >= 92 ? '✓ EXCELLENT' :
+    accuracy >= 82 ? '~ GOOD' :
+    accuracy >= 68 ? '△ FAIR — embedding anchors may need tuning' :
+                     '✗ POOR — likely no OPENAI_API_KEY; rule-based only';
 
-  // Cost
+  console.log(`
+  ① Classification accuracy: ${accuracy.toFixed(1)}%  →  ${accStatus}
+     Easy prompts (rule-based): ${easyAcc.toFixed(1)}%  Hard prompts (semantic): ${hardAcc.toFixed(1)}%
+
+     TARGET NUMBERS:
+       ≥ 95% easy   Rule-based keyword signals working correctly.
+       ≥ 82% hard   Embedding classifier firing; anchor prompts have broad coverage.
+       < 68% overall  Almost certainly no OPENAI_API_KEY. Set it and restart the server.
+
+     WHAT TO DO IF HARD ACCURACY IS LOW:
+       Add more diverse anchor examples to hybridClassifier.ts for the failing domain.
+       The embedding classifier picks the nearest anchor — more anchors = better coverage.
+       Aim for 3–5 anchor phrases per domain that cover different phrasings.`);
+
+  // ── Cost ──────────────────────────────────────────────────────────────────
   const costStatus =
-    savingsPct >= 60 ? '✓ EXCELLENT — router avoids GPT-4o for most prompts' :
-    savingsPct >= 40 ? '~ GOOD' :
-    savingsPct >= 20 ? '△ FAIR — more tasks hitting premium tier than expected' :
-                       '△ LOW — check if provider map is routing all tasks to premium';
-  console.log(`\n  Cost savings ${savingsPct.toFixed(1)}%  →  ${costStatus}`);
-  console.log('    ≥ 60%  Router is directing easy tasks to cheap/balanced tiers.');
-  console.log('    40–60% Mixed. Some complex tasks justifiably hitting premium.');
-  console.log('    < 40%  Many requests hitting premium tier; review routing table.');
+    p.savingsPct >= 65 ? '✓ EXCELLENT — router avoids GPT-4o for the vast majority of requests' :
+    p.savingsPct >= 45 ? '~ GOOD' :
+    p.savingsPct >= 25 ? '△ FAIR — more premium-tier routing than expected' :
+                         '✗ LOW — most requests may be hitting premium tier; check routing table';
 
-  // Escalation
+  console.log(`
+  ② Cost savings vs GPT-4o: ${p.savingsPct.toFixed(1)}%  →  ${costStatus}
+
+     TARGET NUMBERS:
+       ≥ 65%  Router directing easy tasks to cheap/balanced tiers. Typical Together/Haiku range.
+       45–65% Mixed. Some domains legitimately hit premium (research, coding_debug).
+       < 45%  Review ROUTING table in providers/index.ts — many tasks may map to premium providers.
+
+     NOTE: Vision prompts almost always hit premium (GPT-4o / Claude Opus are the capable models).
+     Research and coding_debug are also naturally higher cost. General_chat and summarization
+     should consistently be cheap-tier.`);
+
+  // ── Latency ───────────────────────────────────────────────────────────────
+  const latStatus =
+    p.avgLatencyMs <= 1500 ? '✓ FAST — Together cheap-tier models responding well' :
+    p.avgLatencyMs <= 3000 ? '~ ACCEPTABLE' :
+    p.avgLatencyMs <= 5000 ? '△ SLOW — many requests hitting premium or escalation' :
+                             '✗ VERY SLOW — check provider rate limits or network issues';
+
+  console.log(`
+  ③ Average latency: ${Math.round(p.avgLatencyMs)}ms  p95: ${Math.round(p.p95LatencyMs)}ms  →  ${latStatus}
+
+     TARGET NUMBERS (end-to-end, including network to provider):
+       avg < 800ms   Cheap tier (Llama 3.2 3B, Mistral 7B, Claude Haiku)
+       avg 800–2000ms Balanced tier (Qwen 72B, Claude Sonnet, GPT-4o-mini)
+       avg 2–5s      Premium tier or escalated requests (Claude Opus, GPT-4o)
+       p95 < 6s      Any outliers above this indicate provider timeouts or cold starts.
+
+     High p95 with normal average = occasional escalation spikes. Tune CONFIDENCE_THRESHOLD.`);
+
+  // ── Escalation ────────────────────────────────────────────────────────────
   const escalStatus =
-    escalPct <= 5  ? '△ LOW — classifier may be overconfident; lower CONFIDENCE_THRESHOLD' :
-    escalPct <= 25 ? '✓ HEALTHY' :
-    escalPct <= 40 ? '~ ELEVATED — many ambiguous prompts; consider tuning threshold' :
-                     '✗ HIGH — CONFIDENCE_THRESHOLD may be set too low';
-  console.log(`\n  Escalation ${escalPct.toFixed(1)}%  →  ${escalStatus}`);
-  console.log('    5–25%  Healthy. Escalation fires when the classifier is genuinely uncertain.');
-  console.log('    < 5%   Rarely fires. Check CONFIDENCE_THRESHOLD (default: 0.6).');
-  console.log('    > 25%  Fires too often — raises cost and latency unnecessarily.');
+    escalPct <= 5  ? '△ LOW — classifier may be overconfident; consider lowering CONFIDENCE_THRESHOLD' :
+    escalPct <= 20 ? '✓ HEALTHY' :
+    escalPct <= 35 ? '~ ELEVATED — many ambiguous prompts or threshold is too low' :
+                     '✗ HIGH — CONFIDENCE_THRESHOLD may be set too low; router is escalating excessively';
 
-  console.log('\n  ─────────────────────────────────────────────────────────────────────────\n');
+  console.log(`
+  ④ Escalation rate: ${escalPct.toFixed(1)}%  →  ${escalStatus}
+
+     TARGET NUMBERS:
+       5–20%   Healthy. Fires on genuinely ambiguous prompts (cross-domain language).
+       < 5%    Rarely fires. Lower CONFIDENCE_THRESHOLD (env var) from 0.6 toward 0.5.
+       20–35%  Elevated. Hard benchmark prompts may be triggering it — check misclassified set.
+       > 35%   Threshold too low. Raise CONFIDENCE_THRESHOLD toward 0.7.
+
+     WHAT ESCALATION COSTS: each escalated request calls TWO models and doubles latency + cost.
+     Use the misclassification list in ② to see whether escalated prompts were genuinely ambiguous.`);
+
+  console.log('\n  ══════════════════════════════════════════════════════════════════════════════════\n');
 }
 
 // ---------------------------------------------------------------------------
