@@ -1,18 +1,27 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { InsightsResponse, TaskInsight, ScoredStats, ModelTier, TaskDomain } from '../types';
+import { ALL_DOMAINS } from '../types';
+import { modelDisplayName } from '../utils/modelDisplay';
 
 const TIER_COLOR: Record<ModelTier, string> = {
   cheap: '#00ff88', balanced: '#00d4ff', premium: '#f59e0b',
 };
 
 const DOMAIN_META: Record<TaskDomain, { icon: string; color: string; label: string }> = {
-  coding:   { icon: '{ }', color: '#00d4ff', label: 'Coding'   },
-  math:     { icon: '∑',   color: '#a78bfa', label: 'Math'     },
-  creative: { icon: '✦',   color: '#f472b6', label: 'Creative' },
-  general:  { icon: '◎',   color: '#34d399', label: 'General'  },
+  coding:        { icon: '{}',  color: '#00d4ff', label: 'Coding' },
+  math:          { icon: '∑',  color: '#a78bfa', label: 'Math' },
+  creative:      { icon: '✦',  color: '#f472b6', label: 'Creative' },
+  general:       { icon: '◎',  color: '#34d399', label: 'General' },
+  research:      { icon: '⊙',  color: '#60a5fa', label: 'Research' },
+  summarization: { icon: '≡',  color: '#84cc16', label: 'Summarize' },
+  vision:        { icon: '◈',  color: '#e879f9', label: 'Vision' },
+  coding_debug:  { icon: '⚠',  color: '#f87171', label: 'Debug' },
+  general_chat:  { icon: '◯',  color: '#2dd4bf', label: 'Chat' },
+  multilingual:  { icon: 'Α',  color: '#fbbf24', label: 'Multilingual' },
+  math_reasoning: { icon: '⊢', color: '#c084fc', label: 'Reasoning' },
 };
 
-const DOMAINS: TaskDomain[] = ['coding', 'math', 'creative', 'general'];
+const DOMAINS = ALL_DOMAINS;
 
 // ── Score bar ──────────────────────────────────────────────────────────────
 
@@ -54,7 +63,7 @@ function OptionRow({ stats, isWinner }: { stats: ScoredStats; isWinner: boolean 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {isWinner && <span style={{ fontSize: 9, color: 'var(--accent)', fontFamily: "'IBM Plex Mono', monospace" }}>▶</span>}
           <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: isWinner ? '#f0f0f0' : '#9ca3af' }}>
-            {stats.provider}
+            {modelDisplayName(stats.modelId)}
           </span>
           <span style={{
             fontSize: 9, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 500,
@@ -68,9 +77,9 @@ function OptionRow({ stats, isWinner }: { stats: ScoredStats; isWinner: boolean 
         <div style={{ display: 'flex', gap: 10 }}>
           {[
             { label: 'conf', value: `${(stats.averageConfidence * 100).toFixed(0)}%` },
-            { label: 'lat',  value: `${Math.round(stats.averageLatencyMs)}ms` },
+            { label: 'lat', value: `${Math.round(stats.averageLatencyMs)}ms` },
             { label: 'cost', value: `$${stats.averageCostUsd.toFixed(4)}` },
-            { label: 'esc',  value: `${(stats.escalationRate * 100).toFixed(0)}%` },
+            { label: 'esc', value: `${(stats.escalationRate * 100).toFixed(0)}%` },
           ].map(({ label, value }) => (
             <div key={label} style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 8, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
@@ -153,7 +162,7 @@ function DomainCard({ insight, domain }: { insight: TaskInsight; domain: TaskDom
                 {showAll ? 'hide' : `+${others.length} more`}
               </button>
               {showAll && others.map(s => (
-                <OptionRow key={`${s.provider}:${s.tier}`} stats={s} isWinner={false} />
+                <OptionRow key={s.modelId} stats={s} isWinner={false} />
               ))}
             </>
           )}
@@ -174,12 +183,12 @@ export default function InsightsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res  = await fetch('/api/performance');
+      const res = await fetch('/api/performance');
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Failed.'); }
       else { setInsights(data as InsightsResponse); }
     } catch { setError('Could not reach the backend.'); }
-    finally  { setLoading(false); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);

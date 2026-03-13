@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { RouteResponse, TaskComplexity, TaskDomain, ModelTier, EvaluatedOption } from '../types';
+import { modelDisplayName } from '../utils/modelDisplay';
 
 interface Props {
   result: RouteResponse | null;
@@ -11,7 +12,17 @@ interface Props {
 }
 
 const DOMAIN_COLOR: Record<TaskDomain, string> = {
-  coding: '#00d4ff', math: '#a78bfa', creative: '#f472b6', general: '#34d399',
+  coding:        '#00d4ff',
+  math:          '#a78bfa',
+  creative:      '#f472b6',
+  general:       '#34d399',
+  research:      '#60a5fa',
+  summarization: '#84cc16',
+  vision:        '#e879f9',
+  coding_debug:  '#f87171',
+  general_chat:  '#2dd4bf',
+  multilingual:  '#fbbf24',
+  math_reasoning: '#c084fc',
 };
 
 const TIER_COLOR: Record<ModelTier, string> = {
@@ -128,13 +139,17 @@ function OptionRow({ opt, chosen }: { opt: EvaluatedOption; chosen: boolean }) {
       background: chosen ? 'rgba(0,212,255,0.05)' : 'transparent',
       border: `1px solid ${chosen ? 'rgba(0,212,255,0.2)' : 'transparent'}`,
     }}>
-      {/* Provider + tier */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {/* Model name + tier */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         {chosen && (
           <span style={{ fontSize: 9, color: 'var(--accent)', fontFamily: "'IBM Plex Mono', monospace" }}>▶</span>
         )}
-        <span style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', monospace", color: chosen ? '#f0f0f0' : '#9ca3af' }}>
-          {opt.provider}
+        <span style={{
+          fontSize: 11, fontFamily: "'IBM Plex Mono', monospace",
+          color: chosen ? '#f0f0f0' : '#9ca3af',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {modelDisplayName(opt.modelId)}
         </span>
         <TierChip tier={opt.tier} />
       </div>
@@ -224,7 +239,7 @@ export default function ResponsePanel({ result, error, loading }: Props) {
   if (!result) return null;
 
   const { classification, initialModel, finalModel, escalated, strategyMode, evaluatedOptions, totalCostUsd, latencyMs } = result;
-  const chosenKey = `${initialModel.provider}:${initialModel.tier}`;
+  const chosenModelId = initialModel.model;
 
   const strategyColor = strategyMode === 'exploitation' ? 'var(--green)'
     : strategyMode === 'exploration' ? 'var(--amber)'
@@ -336,9 +351,9 @@ export default function ResponsePanel({ result, error, loading }: Props) {
               <div style={{ padding: '4px 0' }}>
                 {evaluatedOptions.map(opt => (
                   <OptionRow
-                    key={`${opt.provider}:${opt.tier}`}
+                    key={opt.modelId}
                     opt={opt}
-                    chosen={strategyMode === 'exploitation' && `${opt.provider}:${opt.tier}` === chosenKey}
+                    chosen={strategyMode === 'exploitation' && opt.modelId === chosenModelId}
                   />
                 ))}
               </div>

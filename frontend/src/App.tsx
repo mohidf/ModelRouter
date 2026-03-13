@@ -131,7 +131,7 @@ export default function App() {
 
       <footer style={{ borderTop: '1px solid var(--rim)', padding: '14px 24px', textAlign: 'center' }}>
         <p style={{ fontSize: 11, color: 'var(--muted)', fontFamily: "'IBM Plex Mono', monospace", letterSpacing: '0.03em', margin: 0 }}>
-          ModelRouter AI — intelligent LLM routing via OpenAI + Anthropic
+          ModelRouter AI — intelligent LLM routing via Together AI · OpenAI · Anthropic
         </p>
       </footer>
     </div>

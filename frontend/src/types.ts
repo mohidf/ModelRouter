@@ -1,4 +1,21 @@
-export type TaskDomain = 'coding' | 'math' | 'creative' | 'general';
+export type TaskDomain =
+  | 'coding'
+  | 'math'
+  | 'creative'
+  | 'general'
+  | 'research'
+  | 'summarization'
+  | 'vision'
+  | 'coding_debug'
+  | 'general_chat'
+  | 'multilingual'
+  | 'math_reasoning';
+
+export const ALL_DOMAINS: readonly TaskDomain[] = [
+  'coding', 'math', 'creative', 'general',
+  'research', 'summarization', 'vision',
+  'coding_debug', 'general_chat', 'multilingual', 'math_reasoning',
+];
 export type TaskComplexity = 'low' | 'medium' | 'high';
 export type ModelTier = 'cheap' | 'balanced' | 'premium';
 export type OptimizationMode = 'cost' | 'quality' | 'balanced';
@@ -19,14 +36,15 @@ export interface ModelSelection {
 }
 
 export interface EvaluatedOption {
-  provider: string;
-  tier: ModelTier;
-  score: number;
+  modelId:           string;
+  provider:          string;
+  tier:              ModelTier;
+  score:             number;
   averageConfidence: number;
-  averageLatencyMs: number;
-  averageCostUsd: number;
-  escalationRate: number;
-  totalRequests: number;
+  averageLatencyMs:  number;
+  averageCostUsd:    number;
+  escalationRate:    number;
+  totalRequests:     number;
 }
 
 export interface RouteResponse {
@@ -70,6 +88,7 @@ export interface HistoryEntry {
 // ---------------------------------------------------------------------------
 
 export interface PerformanceStats {
+  modelId:           string;
   provider:          string;
   tier:              ModelTier;
   taskType:          TaskDomain;
