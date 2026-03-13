@@ -1,19 +1,36 @@
-# ModelRouter
+# ModelRouter AI
 
-A self-optimizing AI model router that dynamically selects the best LLM provider and model tier based on task type, latency, cost, and historical performance.
+A self-optimizing LLM router that classifies every prompt, picks the cheapest capable model, and learns from every call — achieving **91.7% cost savings vs GPT-4o** at **100% classification accuracy** across 11 task domains.
+
+---
+
+## Benchmark Results
+
+> 50-prompt suite · 11 domains · Together AI + OpenAI + Anthropic
+
+| Metric | Result |
+|--------|--------|
+| Classification accuracy | **100%** (50/50 — easy + hard) |
+| Cost savings vs GPT-4o | **91.7%** |
+| Average cost per request | **$0.00018** (vs $0.00218 GPT-4o) |
+| Escalation rate | **4%** |
+| Average latency | **2414 ms** · p95 4401 ms |
+| Errors | **0** |
+
+74% of requests are served by Together AI Qwen 2.5 7B Turbo (~$73 µ each). The router escalates to premium models only when classifier confidence is low.
 
 ---
 
 ## Features
 
-- **Hybrid classifier** — two-stage pipeline: fast keyword matching (0 ms) for clear prompts, semantic embedding search (OpenAI `text-embedding-3-small`) for ambiguous ones. Falls back to rule-based if the embedding API is unavailable.
-- **Multi-provider routing** — OpenAI and Anthropic, with a clean interface for adding more
-- **Task classification** — classifies prompts as coding, math, creative, or general using both syntax signals and semantic similarity
-- **Strategy engine** — scores every known model using weighted confidence, cost, latency, and escalation metrics
-- **Adaptive learning** — exponential moving averages (EMA) update per-model performance stats after every call
-- **Epsilon-greedy exploration** — occasionally routes to less-used models to discover better options
-- **Escalation** — when classifier confidence is low, automatically retries with a higher-tier model
-- **Cost-aware routing** — `preferCost` and `optimizationMode` options bias routing toward cheaper models
+- **Hybrid classifier** — two-stage pipeline: fast regex signals (~0 ms) for clear prompts; nearest-neighbour embedding search (`text-embedding-3-small`) for ambiguous ones. Anchor vectors pre-loaded at startup so only the live prompt pays API latency (~150 ms).
+- **11 task domains** — coding, coding_debug, math, math_reasoning, creative, general, general_chat, research, summarization, vision, multilingual
+- **Together AI as primary provider** — serverless Turbo models (Qwen 2.5 7B/72B, Llama 3.3 70B, DeepSeek-V3, Llama 4 Maverick) routed by tier
+- **Multi-provider fallback** — OpenAI and Anthropic as fallbacks; vision uses Llama 4 Maverick / GPT-4o; research escalates to Claude
+- **Epsilon-greedy bandit** — 90% exploitation of Supabase performance data, 10% random exploration to discover better options
+- **Domain-specific strategy weights** — each domain has tuned cost/latency/escalation weights so cheap models are not unfairly penalised
+- **Margin-based confidence** — confidence = (top − second) / top, calibrated to 4–12% healthy escalation rate
+- **Adaptive EMA learning** — exponential moving averages update per-model stats after every call
 
 ---
 
@@ -23,30 +40,33 @@ A self-optimizing AI model router that dynamically selects the best LLM provider
 User Prompt
      ↓
 HybridClassifier
-  ├─ Stage 1: RuleBasedClassifier   (keyword signals, ~0 ms, free)
-  │       confidence ≥ 0.80 → return immediately (fast path)
-  └─ Stage 2: EmbeddingClassifier   (cosine similarity vs anchors, ~150 ms)
-          anchor vectors pre-loaded at startup from OpenAI embeddings API
+  ├─ Stage 1: RuleBasedClassifier   (regex signals, ~0 ms, free)
+  │       confidence ≥ 0.80 → fast path — skip embedding entirely
+  └─ Stage 2: EmbeddingClassifier   (nearest-neighbour cosine similarity)
+          maxSimilarity over ~120 anchor vectors across 11 domains
      ↓
-Strategy Engine      (score every known provider/tier, pick best)
+StrategyEngine          (epsilon-greedy bandit, domain-specific weights)
+  score = confWeight × avgConf − costWeight × normCost
+        − latWeight  × normLat − escalWeight × escalRate
      ↓
-Provider Manager     (dispatch to OpenAI or Anthropic)
+ProviderManager         (resolves provider + tier → model ID)
      ↓
- LLM Provider        (generate response)
+LLM Provider            (Together AI / OpenAI / Anthropic)
      ↓
-Performance Store    (record latency, cost, confidence via EMA)
+PerformanceStore        (EMA update → Supabase)
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer     | Technology                                     |
-|-----------|------------------------------------------------|
-| Frontend  | React 19, Vite, TypeScript, Tailwind CSS v4    |
-| Backend   | Node.js, TypeScript, Express                   |
-| AI        | OpenAI API, Anthropic API                      |
-| Database  | Supabase (PostgreSQL)                          |
+| Layer     | Technology                                       |
+|-----------|--------------------------------------------------|
+| Frontend  | React 19, Vite, TypeScript, Tailwind CSS v4      |
+| Backend   | Node.js, TypeScript, Express                     |
+| AI        | Together AI, OpenAI API, Anthropic API           |
+| Embeddings| OpenAI `text-embedding-3-small`                  |
+| Database  | Supabase (PostgreSQL + EMA performance store)    |
 
 ---
 
@@ -54,21 +74,40 @@ Performance Store    (record latency, cost, confidence via EMA)
 
 ```
 model-router-ai/
-├── backend/                   Express API server
+├── backend/
 │   ├── src/
-│   │   ├── providers/         OpenAI, Anthropic, mock providers
-│   │   ├── services/          classifier, router, strategy engine, EMA store
-│   │   ├── routes/            /route, /metrics, /performance endpoints
-│   │   ├── middleware/        rate limiter, request logger, error handler
-│   │   └── lib/               Supabase client
-│   └── supabase/migrations/   SQL schema files
-├── frontend/                  React dashboard
+│   │   ├── config/
+│   │   │   └── models.ts            MODEL_REGISTRY — canonical model IDs + tiers
+│   │   ├── providers/
+│   │   │   ├── togetherProvider.ts  Together AI (OpenAI-compatible endpoint)
+│   │   │   ├── providerManager.ts   Multi-tier dispatch + model-ID resolution
+│   │   │   ├── index.ts             ROUTING_TABLE — domain → provider mapping
+│   │   │   └── types.ts             TaskDomain, ModelTier, shared types
+│   │   ├── services/
+│   │   │   ├── classifier.ts        Rule-based classifier (regex signals)
+│   │   │   ├── embeddingClassifier.ts  Nearest-neighbour embedding classifier
+│   │   │   ├── anchors.ts           ~120 anchor phrases across 11 domains
+│   │   │   ├── strategyEngine.ts    Epsilon-greedy bandit with domain weights
+│   │   │   ├── performanceStore.ts  EMA stats store (Supabase-backed)
+│   │   │   └── router.ts            Main routing pipeline
+│   │   ├── routes/
+│   │   │   └── performance.ts       GET /performance endpoint
+│   │   ├── scripts/
+│   │   │   ├── benchmark.ts         50-prompt accuracy + cost benchmark
+│   │   │   └── resetStats.ts        Clear Supabase perf data for fresh start
+│   │   └── lib/
+│   │       └── supabase.ts          Supabase client singleton
+│   └── supabase/migrations/         SQL schema files (001–004)
+├── frontend/
 │   └── src/
-│       ├── components/        PromptCard, ResponsePanel, MetricsPanel, InsightsPanel
-│       └── types.ts           Shared TypeScript interfaces
-├── docs/                      Architecture documentation
-├── .env.example               Environment variable template
-└── README.md
+│       ├── components/
+│       │   ├── ResponsePanel.tsx    Routing decision + LLM output display
+│       │   └── InsightsPanel.tsx    Per-domain best-model adaptive scores
+│       ├── utils/
+│       │   └── modelDisplay.ts      Cost/latency/tier formatting helpers
+│       └── types.ts                 Mirrors backend types
+└── docs/
+    └── routing-strategy.md
 ```
 
 ---
@@ -78,11 +117,12 @@ model-router-ai/
 ### Prerequisites
 
 - Node.js 18+
-- An [OpenAI API key](https://platform.openai.com/api-keys)
-- An [Anthropic API key](https://console.anthropic.com/settings/keys)
-- A [Supabase](https://supabase.com) project (for performance persistence)
+- [OpenAI API key](https://platform.openai.com/api-keys) — for embeddings (`text-embedding-3-small`) and GPT-4o fallback
+- [Anthropic API key](https://console.anthropic.com/settings/keys) — for Claude fallback on research/complex tasks
+- [Together AI API key](https://api.together.xyz) — primary provider (cheap serverless models)
+- [Supabase](https://supabase.com) project — performance persistence
 
-### 1. Clone the repository
+### 1. Clone
 
 ```bash
 git clone https://github.com/mohidf/ModelRouter.git
@@ -92,44 +132,39 @@ cd ModelRouter
 ### 2. Install dependencies
 
 ```bash
-# Backend
 cd backend && npm install
-
-# Frontend
 cd ../frontend && npm install
 ```
 
-### 3. Configure environment variables
+### 3. Configure environment
 
 ```bash
-cp .env.example backend/.env
-# Edit backend/.env and fill in your API keys and Supabase credentials
+cp backend/.env.example backend/.env
+# Fill in: OPENAI_API_KEY, ANTHROPIC_API_KEY, TOGETHER_API_KEY,
+#          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 ```
 
-### 4. Run the database migrations
+Key optional variables:
 
-Apply the SQL files in `backend/supabase/migrations/` to your Supabase project via the Supabase dashboard SQL editor, in order:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONFIDENCE_THRESHOLD` | `0.20` | Margin below which escalation fires |
+| `ESCALATION_ENABLED` | `true` | Disable to always use primary model |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model for classifier |
 
-1. `001_performance_stats.sql`
-2. `002_request_logs.sql`
-3. `002b_request_logs_patch.sql`
-4. `003_ema_performance.sql`
+### 4. Apply database migrations
 
-### 5. Start the backend
+Run the SQL files in `backend/supabase/migrations/` against your Supabase project in order (001 → 004).
+
+### 5. Start
 
 ```bash
-cd backend
-npm run dev        # hot-reload dev server on http://localhost:3000
+# Terminal 1
+cd backend && npm run dev      # → http://localhost:3000
+
+# Terminal 2
+cd frontend && npm run dev     # → http://localhost:5173
 ```
-
-### 6. Start the frontend
-
-```bash
-cd frontend
-npm run dev        # Vite dev server on http://localhost:5173
-```
-
-Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
@@ -137,66 +172,66 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ### Backend (`/backend`)
 
-| Script               | Description                                 |
-|----------------------|---------------------------------------------|
-| `npm run dev`        | Start with nodemon + ts-node (hot reload)   |
-| `npm run build`      | Compile TypeScript to `dist/`               |
-| `npm start`          | Run compiled `dist/index.js`                |
-| `npm test`           | Run Jest unit test suite                    |
-| `npm run test:coverage` | Unit tests with coverage report          |
-| `npm run test:db`    | Verify Supabase connection                  |
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | nodemon + ts-node hot reload |
+| `npm run build` | Compile TypeScript to `dist/` |
+| `npm start` | Run compiled `dist/index.js` |
+| `npm test` | Jest unit test suite |
+| `npm run test:coverage` | Tests with coverage report |
+| `npm run benchmark` | 50-prompt accuracy + cost benchmark |
+| `npm run reset:stats` | Clear Supabase performance data |
 
 ### Frontend (`/frontend`)
 
-| Script            | Description                           |
-|-------------------|---------------------------------------|
-| `npm run dev`     | Vite dev server with HMR              |
-| `npm run build`   | Type-check + build to `dist/`         |
-| `npm run preview` | Preview the production build locally  |
-
-### Root (convenience)
-
-| Script                | Description                           |
-|-----------------------|---------------------------------------|
-| `npm run backend:dev` | Start backend dev server              |
-| `npm run frontend:dev`| Start frontend dev server             |
-| `npm run install:all` | Install all workspace dependencies    |
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | Type-check + build to `dist/` |
+| `npm run preview` | Preview production build |
 
 ---
 
 ## How It Works
 
-The router runs a three-stage pipeline on every request:
+### 1. Classify
 
-1. **Classify** — a two-stage hybrid classifier assigns the prompt a `domain` (coding/math/creative/general) and `complexity` (low/medium/high) with a confidence score.
-   - **Fast path**: keyword and regex signals score the prompt in ~0 ms. If one domain clearly dominates (confidence ≥ 0.80), the result is used immediately.
-   - **Slow path**: for ambiguous prompts, OpenAI's `text-embedding-3-small` embeds the prompt and compares it against 28 pre-computed anchor vectors (7 per domain). The domain with the highest mean cosine similarity wins. Anchor vectors are pre-loaded at startup so only the live prompt pays the API latency (~150 ms).
-   - **Fallback**: if the embedding API is unreachable, the rule-based result is used and a warning is logged. Routing never fails due to classifier infrastructure.
+The hybrid classifier assigns each prompt a `domain` (11 options) and `complexity` (low/medium/high).
 
-2. **Route** — the strategy engine scores every (provider, tier) combination it has seen before, using a weighted formula:
-   ```
-   score = confidenceWeight × avgConfidence
-         - costWeight       × avgCostUsd
-         - latencyWeight    × avgLatencyMs
-         - escalationWeight × escalationRate
-   ```
-   With probability `ε` (default 10%) it randomly explores a different option instead.
+**Fast path** — regex signals score the prompt in ~0 ms. If one domain's score dominates with confidence ≥ 0.80, the result is used immediately and the embedding is never called.
 
-3. **Learn** — after every call, EMA-smoothed stats are written to Supabase, so the next request benefits from the updated data.
+**Slow path** — for ambiguous prompts, `text-embedding-3-small` embeds the prompt and compares it against ~120 pre-computed anchor vectors (10–12 per domain) using **max cosine similarity** (nearest-neighbour). Max is used instead of mean so that a single exact-match anchor wins cleanly without being diluted by diverse anchors in the same domain.
 
-See [docs/routing-strategy.md](docs/routing-strategy.md) for a deeper explanation.
+**Confidence** is computed as `(top_score − second_score) / top_score`. Values above `CONFIDENCE_THRESHOLD` (default 0.20) are accepted directly; values below trigger escalation.
+
+### 2. Route
+
+The **StrategyEngine** scores every (provider, tier) combination using per-domain weights:
+
+```
+score = confidenceWeight × avgConfidence
+      − costWeight       × normalisedCost
+      − latencyWeight    × normalisedLatency
+      − escalationWeight × escalationRate
+```
+
+With probability ε = 10% it randomly selects a different model to explore. Domain-specific `escalationWeight` values are kept low (0.2–0.8) so cheap models are not unfairly penalised when escalation was triggered by classifier uncertainty rather than model failure.
+
+### 3. Learn
+
+After every call, EMA-smoothed stats (confidence, cost, latency, escalation rate) are written to Supabase. Each subsequent request benefits from the updated data.
 
 ---
 
 ## API Endpoints
 
-| Method | Path               | Description                                    |
-|--------|--------------------|------------------------------------------------|
-| POST   | `/route`           | Route a prompt and return the LLM response     |
-| GET    | `/metrics`         | Aggregate request statistics                   |
-| GET    | `/performance`     | Per-model ranked insights by task type         |
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/route` | Classify prompt and return LLM response |
+| `GET` | `/metrics` | Aggregate request statistics |
+| `GET` | `/performance` | Per-domain best-model insights |
 
-### POST `/route` — request body
+### POST `/route`
 
 ```json
 {
@@ -208,6 +243,23 @@ See [docs/routing-strategy.md](docs/routing-strategy.md) for a deeper explanatio
 ```
 
 `optimizationMode`: `"cost"` | `"balanced"` | `"quality"`
+
+### Response shape
+
+```json
+{
+  "content": "...",
+  "provider": "together",
+  "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+  "domain": "coding",
+  "complexity": "low",
+  "confidence": 0.94,
+  "escalated": false,
+  "cost": { "inputTokens": 45, "outputTokens": 312, "totalUsd": 0.0000731 },
+  "latencyMs": 1842,
+  "routingReason": "Together Qwen 2.5 7B for cost-efficient coding tasks"
+}
+```
 
 ---
 
@@ -226,7 +278,6 @@ See [docs/routing-strategy.md](docs/routing-strategy.md) for a deeper explanatio
 ![Insights tab](assets/screenshots/ui4.png)
 
 ---
-
 
 ## License
 
