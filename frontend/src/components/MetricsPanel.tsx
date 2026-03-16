@@ -1,10 +1,61 @@
 import { useState, useEffect } from 'react';
 import type { MetricsSnapshot } from '../types';
 
+function Refresh({ spin }: { spin: boolean }) {
+  return (
+    <svg className={spin ? 'anim-spin' : ''} width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+  );
+}
+
+interface StatCardProps {
+  label: string;
+  value: string;
+  sub?: string;
+  highlight?: 'danger' | 'success' | 'warning';
+}
+
+function StatCard({ label, value, sub, highlight }: StatCardProps) {
+  const color = highlight === 'danger' ? 'var(--danger)'
+    : highlight === 'success' ? 'var(--success)'
+    : highlight === 'warning' ? 'var(--warning)'
+    : 'var(--text)';
+
+  const borderColor = highlight === 'danger' ? 'rgba(220,38,38,0.3)'
+    : highlight === 'warning' ? 'rgba(217,119,6,0.3)'
+    : 'var(--border)';
+
+  return (
+    <div style={{
+      background: 'var(--surface)',
+      border: `1px solid ${borderColor}`,
+      borderRadius: 'var(--radius-md)',
+      padding: '18px 20px',
+      display: 'flex', flexDirection: 'column', gap: 4,
+      boxShadow: 'var(--shadow-sm)',
+      position: 'relative', overflow: 'hidden',
+    }}>
+      {highlight && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+          background: color, opacity: 0.7,
+        }} aria-hidden="true" />
+      )}
+      <span className="label" style={{ fontSize: 11 }}>{label}</span>
+      <span style={{
+        fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em',
+        color, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums',
+      }}>{value}</span>
+      {sub && <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{sub}</span>}
+    </div>
+  );
+}
+
 export default function MetricsPanel() {
-  const [data, setData] = useState<MetricsSnapshot | null>(null);
+  const [data, setData]       = useState<MetricsSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
 
   async function fetchMetrics() {
     setLoading(true);
@@ -23,133 +74,128 @@ export default function MetricsPanel() {
   useEffect(() => { fetchMetrics(); }, []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', color: '#f0f0f0' }}>
-            Routing Metrics
-          </h2>
-          <p style={{ margin: '3px 0 0', fontSize: 11.5, color: 'var(--muted)' }}>
-            In-process counters — resets on server restart
-          </p>
+          <h1 className="page-title">Routing Metrics</h1>
+          <p className="page-subtitle">In-process counters — resets on server restart</p>
         </div>
         <button
           onClick={fetchMetrics}
           disabled={loading}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '6px 12px', fontSize: 11,
-            fontFamily: "'IBM Plex Mono', monospace",
-            color: 'var(--muted)',
-            background: 'var(--surface)',
-            border: '1px solid var(--rim)',
-            borderRadius: 7, cursor: 'pointer',
-            opacity: loading ? 0.5 : 1,
-          }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--rim-hi)'; (e.currentTarget as HTMLElement).style.color = '#f0f0f0'; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--rim)'; (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
+          className="btn btn-ghost"
+          aria-label="Refresh metrics"
         >
-          <svg className={loading ? 'anim-spin' : ''} width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-          {loading ? 'loading…' : 'refresh'}
+          <Refresh spin={loading} />
+          {loading ? 'Loading…' : 'Refresh'}
         </button>
       </div>
 
       {error && (
         <div style={{
-          padding: '10px 14px', fontSize: 12,
-          fontFamily: "'IBM Plex Mono', monospace",
-          color: 'var(--red)', background: 'var(--red-bg)',
-          border: '1px solid rgba(255,68,102,0.2)', borderRadius: 8,
-        }}>
+          padding: '12px 16px', fontSize: 13, color: 'var(--danger)',
+          background: 'var(--danger-bg)', border: '1px solid color-mix(in srgb, var(--danger) 25%, transparent)',
+          borderRadius: 'var(--radius-md)',
+        }} role="alert">
           {error}
         </div>
       )}
 
       {/* Skeleton */}
       {loading && !data && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="skeleton" style={{ height: 80, borderRadius: 10 }} />
-          ))}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+          {[...Array(6)].map((_, i) => <div key={i} className="skeleton" style={{ height: 96 }} />)}
         </div>
       )}
 
       {data && (
         <>
           {/* Stat grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            <StatCard label="Total Requests"  value={data.totalRequests.toLocaleString()}       sub="all time" />
-            <StatCard label="Escalation Rate" value={`${data.escalationRatePercent}%`}           sub={`${data.escalationCount} escalations`} accent={data.escalationRatePercent > 20} />
-            <StatCard label="Avg Latency"     value={`${data.averageLatencyMs}ms`}               sub="per request" />
-            <StatCard label="Total Tokens"    value={data.totalTokens.toLocaleString()}           sub="in + out" />
-            <StatCard label="Est. Cost"       value={`$${data.totalEstimatedCostUsd.toFixed(4)}`} sub="USD total" />
-            <StatCard label="Models Used"     value={String(Object.keys(data.perModel).length)}  sub="unique models" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+            <StatCard label="Total Requests"  value={data.totalRequests.toLocaleString()}           sub="All time" />
+            <StatCard
+              label="Escalation Rate"
+              value={`${data.escalationRatePercent}%`}
+              sub={`${data.escalationCount} escalations`}
+              highlight={data.escalationRatePercent > 30 ? 'danger' : data.escalationRatePercent > 15 ? 'warning' : undefined}
+            />
+            <StatCard label="Avg Latency"     value={`${data.averageLatencyMs}ms`}                  sub="Per request" />
+            <StatCard label="Total Tokens"    value={data.totalTokens.toLocaleString()}              sub="Input + output" />
+            <StatCard label="Est. Total Cost" value={`$${data.totalEstimatedCostUsd.toFixed(4)}`}   sub="USD" />
+            <StatCard label="Models Used"     value={String(Object.keys(data.perModel).length)}      sub="Unique models" highlight={Object.keys(data.perModel).length > 0 ? 'success' : undefined} />
           </div>
 
           {/* Per-model table */}
-          <div style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--rim)',
-            borderRadius: 10, overflow: 'hidden',
-          }}>
+          <div className="card">
             <div style={{
-              padding: '10px 16px',
-              borderBottom: '1px solid var(--rim)',
+              padding: '12px 18px', borderBottom: '1px solid var(--border)',
+              background: 'var(--surface-2)',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             }}>
-              <span style={{
-                fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
-                color: 'var(--muted)', letterSpacing: '0.1em', textTransform: 'uppercase',
-              }}>
-                Per Model
+              <span className="label">Per Model Breakdown</span>
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {Object.keys(data.perModel).length} model{Object.keys(data.perModel).length !== 1 ? 's' : ''}
               </span>
             </div>
 
             {Object.keys(data.perModel).length === 0 ? (
-              <div style={{ padding: '36px 0', textAlign: 'center' }}>
-                <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>No model calls yet — run some prompts</p>
+              <div style={{ padding: '48px 0', textAlign: 'center' }}>
+                <svg width="28" height="28" fill="none" stroke="var(--muted)" strokeWidth="1.5" viewBox="0 0 24 24" aria-hidden="true" style={{ margin: '0 auto 10px', display: 'block' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                <p style={{ fontSize: 13.5, color: 'var(--text-2)', margin: 0 }}>No model calls yet</p>
+                <p style={{ fontSize: 12, color: 'var(--muted)', margin: '4px 0 0' }}>Run some prompts to see per-model data.</p>
               </div>
             ) : (
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid var(--rim)' }}>
-                      {['Model', 'Calls', 'Avg Latency', 'Tokens', 'Cost'].map(h => (
+                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                      {[
+                        { h: 'Model', align: 'left' },
+                        { h: 'Calls', align: 'right' },
+                        { h: 'Avg Latency', align: 'right' },
+                        { h: 'Total Tokens', align: 'right' },
+                        { h: 'Cost', align: 'right' },
+                      ].map(({ h, align }) => (
                         <th key={h} style={{
-                          padding: '8px 14px',
-                          textAlign: h === 'Model' ? 'left' : 'right',
-                          fontSize: 9, fontFamily: "'IBM Plex Mono', monospace",
-                          color: 'var(--muted)', letterSpacing: '0.09em', textTransform: 'uppercase',
-                          fontWeight: 500,
-                          backgroundColor: 'rgba(255,255,255,0.02)',
+                          padding: '10px 18px', textAlign: align as 'left' | 'right',
+                          fontSize: 11, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase',
+                          color: 'var(--muted)', background: 'var(--surface-2)',
                         }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(data.perModel).map(([model, m], i) => (
-                      <tr key={model}
-                        style={{ borderBottom: i < Object.keys(data.perModel).length - 1 ? '1px solid var(--rim)' : 'none' }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; }}
+                    {Object.entries(data.perModel).map(([model, m], i, arr) => (
+                      <tr
+                        key={model}
+                        style={{ borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', transition: 'background 0.1s' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'; }}
                         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
                       >
-                        <td style={{ padding: '9px 14px' }}>
+                        <td style={{ padding: '11px 18px' }}>
                           <span style={{
-                            fontFamily: "'IBM Plex Mono', monospace", fontSize: 11,
+                            fontSize: 12.5, fontFamily: "'JetBrains Mono', monospace",
                             color: 'var(--accent)',
-                            background: 'var(--accent-bg)',
-                            border: '1px solid rgba(0,212,255,0.15)',
-                            borderRadius: 4, padding: '2px 7px',
+                            background: 'var(--accent-subtle)', border: '1px solid var(--accent-ring)',
+                            borderRadius: 'var(--radius-sm)', padding: '2px 8px',
                           }}>{model}</span>
                         </td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace", color: '#e0e0e8' }}>{m.calls}</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)' }}>{m.averageLatencyMs}ms</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)' }}>{m.totalTokens.toLocaleString()}</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)' }}>${m.totalCostUsd.toFixed(5)}</td>
+                        <td style={{ padding: '11px 18px', textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, color: 'var(--text)' }}>
+                          {m.calls.toLocaleString()}
+                        </td>
+                        <td style={{ padding: '11px 18px', textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-2)' }}>
+                          {m.averageLatencyMs.toLocaleString()}ms
+                        </td>
+                        <td style={{ padding: '11px 18px', textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-2)' }}>
+                          {m.totalTokens.toLocaleString()}
+                        </td>
+                        <td style={{ padding: '11px 18px', textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-2)' }}>
+                          ${m.totalCostUsd.toFixed(5)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -158,33 +204,6 @@ export default function MetricsPanel() {
             )}
           </div>
         </>
-      )}
-    </div>
-  );
-}
-
-function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div style={{
-      background: 'var(--surface)',
-      border: `1px solid ${accent ? 'rgba(255,68,102,0.25)' : 'var(--rim)'}`,
-      borderRadius: 10, padding: '14px 16px',
-      display: 'flex', flexDirection: 'column', gap: 4,
-    }}>
-      <span style={{ fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: 'var(--muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-        {label}
-      </span>
-      <span style={{
-        fontSize: 22, fontWeight: 600, fontFamily: "'DM Sans', system-ui, sans-serif",
-        letterSpacing: '-0.03em', color: accent ? 'var(--red)' : '#f0f0f0',
-        lineHeight: 1.1,
-      }}>
-        {value}
-      </span>
-      {sub && (
-        <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: "'IBM Plex Mono', monospace" }}>
-          {sub}
-        </span>
       )}
     </div>
   );

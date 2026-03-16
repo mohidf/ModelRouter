@@ -77,7 +77,7 @@ export interface MetricsSnapshot {
 }
 
 export interface HistoryEntry {
-  id: number;
+  id: string;
   prompt: string;
   result: RouteResponse;
   timestamp: Date;
