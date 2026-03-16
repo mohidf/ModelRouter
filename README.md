@@ -1,23 +1,6 @@
 # ModelRouter AI
 
-A self-optimizing LLM router that classifies every prompt, picks the cheapest capable model, and learns from every call — achieving **91.7% cost savings vs GPT-4o** at **100% classification accuracy** across 11 task domains.
-
----
-
-## Benchmark Results
-
-> 50-prompt suite · 11 domains · Together AI + OpenAI + Anthropic
-
-| Metric | Result |
-|--------|--------|
-| Classification accuracy | **100%** (50/50 — easy + hard) |
-| Cost savings vs GPT-4o | **91.7%** |
-| Average cost per request | **$0.00018** (vs $0.00218 GPT-4o) |
-| Escalation rate | **4%** |
-| Average latency | **2414 ms** · p95 4401 ms |
-| Errors | **0** |
-
-74% of requests are served by Together AI Qwen 2.5 7B Turbo (~$73 µ each). The router escalates to premium models only when classifier confidence is low.
+A self-optimizing LLM router that classifies every prompt, picks the cheapest capable model, and learns from every call across 11 task domains.
 
 ---
 
@@ -25,12 +8,14 @@ A self-optimizing LLM router that classifies every prompt, picks the cheapest ca
 
 - **Hybrid classifier** — two-stage pipeline: fast regex signals (~0 ms) for clear prompts; nearest-neighbour embedding search (`text-embedding-3-small`) for ambiguous ones. Anchor vectors pre-loaded at startup so only the live prompt pays API latency (~150 ms).
 - **11 task domains** — coding, coding_debug, math, math_reasoning, creative, general, general_chat, research, summarization, vision, multilingual
+- **Classifier precision** — explain-intent detection routes pure "explain X" prompts to general rather than domain specialists; vision domain avoids false positives on chart/graph coding prompts
 - **Together AI as primary provider** — serverless Turbo models (Qwen 2.5 7B/72B, Llama 3.3 70B, DeepSeek-V3, Llama 4 Maverick) routed by tier
 - **Multi-provider fallback** — OpenAI and Anthropic as fallbacks; vision uses Llama 4 Maverick / GPT-4o; research escalates to Claude
 - **Epsilon-greedy bandit** — 90% exploitation of Supabase performance data, 10% random exploration to discover better options
 - **Domain-specific strategy weights** — each domain has tuned cost/latency/escalation weights so cheap models are not unfairly penalised
 - **Margin-based confidence** — confidence = (top − second) / top, calibrated to 4–12% healthy escalation rate
 - **Adaptive EMA learning** — exponential moving averages update per-model stats after every call
+- **Rate limiting** — per-IP fixed-window limiter with periodic memory pruning; standard `X-RateLimit-*` headers; separate budget for meta endpoints
 
 ---
 
@@ -76,22 +61,38 @@ PerformanceStore        (EMA update → Supabase)
 model-router-ai/
 ├── backend/
 │   ├── src/
+│   │   ├── config.ts                Centralised config (env vars, defaults)
+│   │   ├── index.ts                 Express app, rate limiters, startup warm-up
 │   │   ├── config/
 │   │   │   └── models.ts            MODEL_REGISTRY — canonical model IDs + tiers
 │   │   ├── providers/
 │   │   │   ├── togetherProvider.ts  Together AI (OpenAI-compatible endpoint)
+│   │   │   ├── openaiProvider.ts    OpenAI provider
+│   │   │   ├── claudeProvider.ts    Anthropic provider
 │   │   │   ├── providerManager.ts   Multi-tier dispatch + model-ID resolution
 │   │   │   ├── index.ts             ROUTING_TABLE — domain → provider mapping
 │   │   │   └── types.ts             TaskDomain, ModelTier, shared types
 │   │   ├── services/
-│   │   │   ├── classifier.ts        Rule-based classifier (regex signals)
+│   │   │   ├── classifier.ts        Rule-based classifier (regex signals, explain-intent detection)
+│   │   │   ├── hybridClassifier.ts  Two-stage hybrid (rule-based → embedding fallback)
 │   │   │   ├── embeddingClassifier.ts  Nearest-neighbour embedding classifier
 │   │   │   ├── anchors.ts           ~120 anchor phrases across 11 domains
-│   │   │   ├── strategyEngine.ts    Epsilon-greedy bandit with domain weights
+│   │   │   ├── strategyEngine.ts    Epsilon-greedy bandit with domain weights + DB fallback
 │   │   │   ├── performanceStore.ts  EMA stats store (Supabase-backed)
+│   │   │   ├── metrics.ts           In-memory request metrics aggregator
 │   │   │   └── router.ts            Main routing pipeline
+│   │   ├── middleware/
+│   │   │   ├── rateLimiter.ts       Per-IP fixed-window limiter with prune()
+│   │   │   ├── errorHandler.ts      Global Express error handler
+│   │   │   └── requestLogger.ts     HTTP request/response logger
 │   │   ├── routes/
-│   │   │   └── performance.ts       GET /performance endpoint
+│   │   │   ├── route.ts             POST /route — classify + route + respond
+│   │   │   ├── metrics.ts           GET /metrics — aggregate stats
+│   │   │   └── performance.ts       GET /performance — per-domain insights (parallelised)
+│   │   ├── __tests__/
+│   │   │   ├── classifier.test.ts   Domain classification + explain-intent tests
+│   │   │   ├── strategyEngine.test.ts  Bandit scoring + DB resilience tests
+│   │   │   └── rateLimiter.test.ts  Window expiry + prune tests (fake timers)
 │   │   ├── scripts/
 │   │   │   ├── benchmark.ts         50-prompt accuracy + cost benchmark
 │   │   │   └── resetStats.ts        Clear Supabase perf data for fresh start
@@ -100,12 +101,17 @@ model-router-ai/
 │   └── supabase/migrations/         SQL schema files (001–004)
 ├── frontend/
 │   └── src/
+│       ├── App.tsx                  Shell, tabs, theme toggle, history state
+│       ├── index.css                Design tokens, layout, animations
 │       ├── components/
-│       │   ├── ResponsePanel.tsx    Routing decision + LLM output display
+│       │   ├── PromptCard.tsx       Prompt input with mode pills (cost/balanced/quality)
+│       │   ├── ResponsePanel.tsx    Two-column: prose left, pipeline + options right
+│       │   ├── HistoryPanel.tsx     Session history with result previews
+│       │   ├── MetricsPanel.tsx     Live request stats + per-model breakdown
 │       │   └── InsightsPanel.tsx    Per-domain best-model adaptive scores
 │       ├── utils/
-│       │   └── modelDisplay.ts      Cost/latency/tier formatting helpers
-│       └── types.ts                 Mirrors backend types
+│       │   └── modelDisplay.ts      Model ID → short display name mapping
+│       └── types.ts                 Mirrors backend RouteResponse + related types
 └── docs/
     └── routing-strategy.md
 ```
@@ -237,7 +243,6 @@ After every call, EMA-smoothed stats (confidence, cost, latency, escalation rate
 {
   "prompt": "Explain binary search trees",
   "maxTokens": 1024,
-  "preferCost": false,
   "optimizationMode": "balanced"
 }
 ```
@@ -248,16 +253,38 @@ After every call, EMA-smoothed stats (confidence, cost, latency, escalation rate
 
 ```json
 {
-  "content": "...",
-  "provider": "together",
-  "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
-  "domain": "coding",
-  "complexity": "low",
-  "confidence": 0.94,
+  "response": "...",
+  "classification": {
+    "domain": "coding",
+    "complexity": "low",
+    "confidence": 0.94,
+    "estimatedTokens": 12
+  },
+  "initialModel": {
+    "provider": "together",
+    "model": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+    "tier": "cheap",
+    "reason": "...",
+    "modelConfidence": 1.0
+  },
+  "finalModel": { "provider": "together", "model": "Qwen/Qwen2.5-7B-Instruct-Turbo", "tier": "cheap", "reason": "...", "modelConfidence": 1.0 },
   "escalated": false,
-  "cost": { "inputTokens": 45, "outputTokens": 312, "totalUsd": 0.0000731 },
+  "strategyMode": "exploitation",
   "latencyMs": 1842,
-  "routingReason": "Together Qwen 2.5 7B for cost-efficient coding tasks"
+  "totalCostUsd": 0.0000731,
+  "evaluatedOptions": [
+    {
+      "modelId": "Qwen/Qwen2.5-7B-Instruct-Turbo",
+      "provider": "together",
+      "tier": "cheap",
+      "score": 2.91,
+      "averageConfidence": 1.0,
+      "averageLatencyMs": 1842,
+      "averageCostUsd": 0.0000731,
+      "escalationRate": 0.0,
+      "totalRequests": 14
+    }
+  ]
 }
 ```
 
