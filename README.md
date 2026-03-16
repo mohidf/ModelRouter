@@ -292,11 +292,11 @@ After every call, EMA-smoothed stats (confidence, cost, latency, escalation rate
 
 ## Screenshots
 
-### Prompt — enter your query and routing options
+### Prompt — response with routing pipeline and evaluated options
 ![Prompt tab](assets/screenshots/ui1.png)
 
-### Response — markdown output with routing decision pipeline
-![Response panel](assets/screenshots/ui2.png)
+### History — session history with classification and routing details
+![History panel](assets/screenshots/ui2.png)
 
 ### Metrics — live request statistics and per-model breakdown
 ![Metrics tab](assets/screenshots/ui3.png)
