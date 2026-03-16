@@ -32,6 +32,9 @@ const DOMAIN_SIGNALS: Record<SpecificDomain, Signal[]> = {
     { pattern: /```[\s\S]*```|`[^`\n]+`/,                                                    weight: 5 },
     { pattern: /\b(function|class|const|let|var|def|return|import|export|interface)\b/,      weight: 4 },
     { pattern: /\b(implement|build|write|create)\b.{0,30}\b(function|api|service|class|component|module)\b/i, weight: 4 },
+    // Data visualisation and chart-building in code — prevents these from routing to vision.
+    // "create a bar chart with D3.js", "plot a line graph using matplotlib" → coding.
+    { pattern: /\b(create|build|write|generate|render|plot)\b.{0,30}\b(chart|graph|plot|diagram|visualization)\b/i, weight: 4 },
     { pattern: /\b(typescript|javascript|python|java|rust|golang|kotlin|swift|bash|php)\b/i, weight: 3 },
     { pattern: /\b(algorithm|array|hash|tree|graph|sort|recursion|complexity)\b/i,           weight: 2 },
     { pattern: /\b(api|endpoint|database|sql|schema|repository|service|middleware)\b/i,      weight: 2 },
@@ -101,7 +104,13 @@ const DOMAIN_SIGNALS: Record<SpecificDomain, Signal[]> = {
 
   // ── vision: images, diagrams, visual content ─────────────────────────────
   vision: [
-    { pattern: /\b(image|photo|picture|screenshot|diagram|chart|graph|visual|figure)\b/i,            weight: 5 },
+    // Unambiguous visual input terms — only meaningfully appear when discussing
+    // actual images or screenshots submitted to the model.
+    { pattern: /\b(image|photo|picture|screenshot)\b/i,                                             weight: 5 },
+    // Ambiguous visual terms — "chart", "graph", "diagram" appear frequently in
+    // coding/data contexts ("create a chart with D3", "a UML diagram"). Lower weight
+    // prevents false positives when paired with coding signals.
+    { pattern: /\b(diagram|chart|graph|visual|figure)\b/i,                                          weight: 2 },
     { pattern: /\b(describe (this|the)|what('s| is) in (this|the)|analyze this image|caption)\b/i,  weight: 5 },
     { pattern: /\b(look at|see|observe|identify|detect|recognize) .{0,20}(image|picture|photo)\b/i, weight: 4 },
     { pattern: /\b(ocr|extract text from|read the|handwriting)\b/i,                                 weight: 4 },
@@ -151,6 +160,13 @@ export class RuleBasedClassifier implements IClassifier {
   }
 
   private scoreDomain(prompt: string): { domain: TaskDomain; confidence: number } {
+    // Pedagogical intent check: "explain X" prompts route to general rather than
+    // the X domain, because the user wants a conceptual explanation, not specialised
+    // model output. Exception: explicit implementation signals keep the specialist domain.
+    if (this.isExplainIntent(prompt)) {
+      return { domain: 'general', confidence: 0.5 };
+    }
+
     // Derive from DOMAIN_SIGNALS keys so adding a new entry automatically includes it.
     const specificDomains = Object.keys(DOMAIN_SIGNALS) as SpecificDomain[];
 
@@ -184,6 +200,21 @@ export class RuleBasedClassifier implements IClassifier {
     if (points >= 6) return 'high';
     if (points >= 3) return 'medium';
     return 'low';
+  }
+
+  /**
+   * Returns true when the prompt is a pure conceptual/pedagogical request
+   * ("explain quicksort", "explain how recursion works") that should be routed
+   * to a general-purpose model rather than a domain specialist.
+   *
+   * Implementation signals (implement, write, build, create + language name)
+   * override the explain intent — "explain how to implement X in Python"
+   * is a legitimate coding request that should stay in the coding domain.
+   */
+  private isExplainIntent(prompt: string): boolean {
+    const EXPLAIN_START  = /^\s*explain\b/i;
+    const IMPL_SIGNALS   = /\b(implement|write|build|create|a function|a class|the code for|in python|in typescript|in javascript|in java|in go|in rust|in kotlin|in swift)\b/i;
+    return EXPLAIN_START.test(prompt) && !IMPL_SIGNALS.test(prompt);
   }
 
   private sumSignals(prompt: string, signals: Signal[]): number {

@@ -27,19 +27,26 @@ export function validateRequiredEnv(): void {
 const VALID_LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type LogLevel = typeof VALID_LOG_LEVELS[number];
 
+// Note: these helpers use process.stderr.write rather than the structured
+// logger because config.ts is loaded before the logger is initialised —
+// importing logger here would create a circular dependency.
+function configWarn(msg: string): void {
+  process.stderr.write(`[config] ${msg}\n`);
+}
+
 function parseLogLevel(raw: string | undefined): LogLevel {
   const value = raw ?? 'info';
   if ((VALID_LOG_LEVELS as readonly string[]).includes(value)) {
     return value as LogLevel;
   }
-  console.warn(`[config] Invalid LOG_LEVEL "${value}", defaulting to "info"`);
+  configWarn(`Invalid LOG_LEVEL "${value}", defaulting to "info"`);
   return 'info';
 }
 
 function parsePositiveFloat(raw: string | undefined, fallback: number, name: string): number {
   const value = parseFloat(raw ?? String(fallback));
   if (isNaN(value) || value < 0) {
-    console.warn(`[config] Invalid ${name} "${raw}", defaulting to ${fallback}`);
+    configWarn(`Invalid ${name} "${raw}", defaulting to ${fallback}`);
     return fallback;
   }
   return value;
@@ -49,7 +56,7 @@ function parsePositiveFloat(raw: string | undefined, fallback: number, name: str
 function parseUnitFloat(raw: string | undefined, fallback: number, name: string): number {
   const value = parseFloat(raw ?? String(fallback));
   if (isNaN(value) || value < 0 || value > 1) {
-    console.warn(`[config] Invalid ${name} "${raw}" (must be 0–1), defaulting to ${fallback}`);
+    configWarn(`Invalid ${name} "${raw}" (must be 0–1), defaulting to ${fallback}`);
     return fallback;
   }
   return value;
@@ -58,7 +65,7 @@ function parseUnitFloat(raw: string | undefined, fallback: number, name: string)
 function parseAlpha(raw: string | undefined, fallback: number): number {
   const value = parseFloat(raw ?? String(fallback));
   if (isNaN(value) || value <= 0 || value > 1) {
-    console.warn(`[config] Invalid EMA_ALPHA "${raw}" (must be 0 < α ≤ 1), defaulting to ${fallback}`);
+    configWarn(`Invalid EMA_ALPHA "${raw}" (must be 0 < α ≤ 1), defaulting to ${fallback}`);
     return fallback;
   }
   return value;
@@ -67,7 +74,7 @@ function parseAlpha(raw: string | undefined, fallback: number): number {
 function parsePositiveInt(raw: string | undefined, fallback: number, name: string): number {
   const value = parseInt(raw ?? String(fallback), 10);
   if (isNaN(value) || value <= 0) {
-    console.warn(`[config] Invalid ${name} "${raw}", defaulting to ${fallback}`);
+    configWarn(`Invalid ${name} "${raw}", defaulting to ${fallback}`);
     return fallback;
   }
   return value;

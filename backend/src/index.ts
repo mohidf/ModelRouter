@@ -12,17 +12,33 @@ import { hybridClassifier } from './services/hybridClassifier';
 
 const app = express();
 
+// Trust the first proxy hop so req.ip returns the real client address
+// when the server runs behind a load balancer or reverse proxy (e.g. nginx,
+// Render, Railway, Fly.io). Without this, all requests appear to come from
+// the proxy IP and per-client rate limiting is useless.
+app.set('trust proxy', 1);
+
 // --- Middleware ---
 app.use(express.json({ limit: config.bodyLimit }));
 app.use(requestLogger);
 
-// --- Rate limiter (applies only to /route — provider calls) ---
-const rateLimiter = new RateLimiter(config.rateLimitPerHour, 60 * 60 * 1000);
+// --- Rate limiters ---
+const rateLimiter  = new RateLimiter(config.rateLimitPerHour, 60 * 60 * 1000);
+const metaLimiter  = new RateLimiter(200,                     60 * 60 * 1000);
+
+// Periodically prune expired rate-limiter entries to prevent unbounded Map growth.
+// Each unique IP that ever made a request occupies one entry; without pruning,
+// a traffic spike from many IPs leaves stale entries indefinitely.
+const PRUNE_INTERVAL_MS = 10 * 60 * 1_000; // every 10 minutes
+setInterval(() => {
+  rateLimiter.prune();
+  metaLimiter.prune();
+}, PRUNE_INTERVAL_MS).unref(); // .unref() so this interval does not keep the process alive
 
 // --- Routes ---
-app.use('/route',       createRateLimiterMiddleware(rateLimiter), routeRouter);
-app.use('/metrics',     metricsRouter);
-app.use('/performance', performanceRouter);
+app.use('/route',       createRateLimiterMiddleware(rateLimiter),  routeRouter);
+app.use('/metrics',     createRateLimiterMiddleware(metaLimiter),  metricsRouter);
+app.use('/performance', createRateLimiterMiddleware(metaLimiter),  performanceRouter);
 
 // Health check
 app.get('/health', (_req, res) => {

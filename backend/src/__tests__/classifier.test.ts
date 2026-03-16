@@ -499,3 +499,101 @@ describe('RuleBasedClassifier — edge cases', () => {
   });
 
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Explain intent — pedagogical requests route to general
+//
+// "explain quicksort" and "explain how recursion works" share vocabulary with
+// the coding domain (algorithm, recursion), but the user intent is conceptual
+// understanding, not implementation. Routing these to a coding specialist
+// wastes premium-tier compute and may produce implementation-heavy responses
+// when the user just wanted a simple explanation.
+//
+// Exception: explicit implementation signals ("explain how to implement X in
+// Python") correctly override the explain intent and stay in the coding domain.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RuleBasedClassifier — explain intent routing', () => {
+
+  it('routes "explain quicksort" to general, not coding', async () => {
+    // Why: "quicksort" is an algorithm keyword (coding signal weight 2),
+    // but the user is asking for a concept explanation, not code output.
+    // Routing to coding routes to a model optimised for implementation, which
+    // gives verbose code dumps when the user wanted a simple explanation.
+    const result = await classifier.classify('explain quicksort');
+    expect(result.domain).toBe('general');
+  });
+
+  it('routes "explain how recursion works" to general, not coding', async () => {
+    // Why: same as above — "recursion" is a coding keyword but the verb "explain"
+    // signals a pedagogical request that any capable model handles well.
+    const result = await classifier.classify('explain how recursion works');
+    expect(result.domain).toBe('general');
+  });
+
+  it('routes "explain binary search" to general, not coding', async () => {
+    const result = await classifier.classify('explain binary search');
+    expect(result.domain).toBe('general');
+  });
+
+  it('keeps coding domain when explain prompt contains implementation signals', async () => {
+    // Why: "explain how to implement X in Python" is both an explain AND a code
+    // task. The user wants working code with explanation. Route to coding.
+    const result = await classifier.classify('explain how to implement a binary tree in Python');
+    expect(result.domain).toBe('coding');
+  });
+
+  it('does not misfire on implementation prompts without "explain" prefix', async () => {
+    // Why: only "explain"-prefixed prompts should be caught. Standard coding
+    // prompts must continue to route to coding.
+    const result = await classifier.classify('write a quicksort function in TypeScript');
+    expect(result.domain).toBe('coding');
+  });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. Vision domain precision — no false positives in coding/data contexts
+//
+// Before the fix, "chart", "graph", "diagram" in the vision domain had weight 5 —
+// the same as "image" and "photo". This caused prompts like "create a bar chart
+// with D3.js" to route to vision (weight 5) over coding (weight 2), even though
+// the user is asking to write code, not analyse an image.
+//
+// Fix:
+//   - Unambiguous visual terms (image, photo, picture, screenshot): weight 5
+//   - Ambiguous visual terms (diagram, chart, graph, visual, figure): weight 2
+//   - New coding signal: (create|build|plot).{0,30}(chart|graph|diagram): weight 4
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RuleBasedClassifier — vision domain precision', () => {
+
+  it('routes chart-building code prompts to coding, not vision', async () => {
+    // Why: "create a bar chart with D3.js" is a code generation request.
+    // The old weight-5 "chart" signal pushed it to vision — a model that
+    // expects an image as input and produces visual analysis, not code.
+    const result = await classifier.classify('create a bar chart with D3.js');
+    expect(result.domain).toBe('coding');
+  });
+
+  it('routes graph plotting to coding, not vision', async () => {
+    // Why: "plot a line graph using matplotlib" is Python data visualisation code.
+    // Users expect matplotlib/D3/Chart.js code in return, not image analysis.
+    const result = await classifier.classify('plot a line graph using matplotlib');
+    expect(result.domain).toBe('coding');
+  });
+
+  it('still routes genuine image analysis prompts to vision', async () => {
+    // Why: must verify the fix does not over-correct.
+    // "describe this image" remains a strong vision signal (image weight 5 + describe-this weight 5).
+    const result = await classifier.classify('describe this image in detail');
+    expect(result.domain).toBe('vision');
+  });
+
+  it('still routes screenshot prompts to vision', async () => {
+    // Why: same over-correction guard — screenshot is unambiguous visual input.
+    const result = await classifier.classify('what is shown in this screenshot');
+    expect(result.domain).toBe('vision');
+  });
+
+});

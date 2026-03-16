@@ -139,9 +139,14 @@ export class PerformanceStore {
    * returned entry has at least one data point.
    */
   async getAllStats(taskType?: TaskDomain): Promise<PerformanceStats[]> {
+    // LIMIT bounds the result set to at most 2× the model registry size,
+    // preventing unbounded reads as the performance table grows.
+    const STATS_LIMIT = 200;
+
     let query = getSupabaseClient()
       .from('performance_stats')
-      .select('*');
+      .select('*')
+      .limit(STATS_LIMIT);
 
     if (taskType !== undefined) {
       query = query.eq('task_type', taskType);

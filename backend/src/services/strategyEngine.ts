@@ -13,10 +13,23 @@ import { logger } from '../utils/logger';
 // Adjust these constants if real-world costs or latencies exceed these ceilings.
 // ---------------------------------------------------------------------------
 
-/** Maximum expected cost per API call in USD. Calls above this clamp to 1. */
-const MAX_COST_USD   = 0.10;
-/** Maximum expected latency in ms. Calls above this clamp to 1. */
-const MAX_LATENCY_MS = 5_000;
+/**
+ * Maximum expected cost per API call in USD used for normalisation.
+ * Real-world ranges: cheap $0.0001–$0.001, balanced $0.005–$0.015,
+ * premium $0.015–$0.05. A ceiling of $0.20 ensures no real-world call
+ * is clamped to 1.0, preserving meaningful score separation across tiers.
+ * Calls above this clamp to 1 (worst possible cost penalty).
+ */
+const MAX_COST_USD   = 0.20;
+
+/**
+ * Maximum expected latency in ms used for normalisation.
+ * In practice models range 500ms–20000ms. A ceiling of 30 000ms ensures
+ * that a 10 000ms model is not treated identically to a 6 000ms one —
+ * both stay well below the clamp and retain proportional penalties.
+ * Calls above this clamp to 1 (worst possible latency penalty).
+ */
+const MAX_LATENCY_MS = 30_000;
 
 // Tiers valid for exploration at each complexity level.
 // Prevents exploration from routing a high-complexity task to 'cheap' tier.
@@ -233,7 +246,22 @@ export class StrategyEngine {
     complexity: TaskComplexity,
     override?: WeightOverrideConfig,
   ): Promise<StrategyDecision> {
-    const candidates = await performanceStore.getAllStats(taskType);
+    let candidates: PerformanceStats[];
+    try {
+      candidates = await performanceStore.getAllStats(taskType);
+    } catch (err) {
+      logger.warn('StrategyEngine.choose: performance store unavailable, using static routing fallback', {
+        taskType, error: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        resolved:      providerManager.resolve(taskType, complexity),
+        winningStats:  null,
+        score:         null,
+        usedFallback:  true,
+        explored:      false,
+        rankedOptions: [],
+      };
+    }
 
     if (candidates.length === 0) {
       return {
@@ -249,7 +277,15 @@ export class StrategyEngine {
     const weights = this.resolveWeights(taskType, override);
     const rankedOptions = candidates
       .map(s => ({ ...s, score: this.scoreStats(s, weights) }))
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => {
+        const diff = b.score - a.score;
+        // Break ties (within floating-point noise) by preferring lower cost,
+        // then lower latency — prevents DB insertion order from deciding.
+        if (Math.abs(diff) > 1e-6) return diff;
+        const costDiff = a.averageCostUsd - b.averageCostUsd;
+        if (Math.abs(costDiff) > 1e-9) return costDiff;
+        return a.averageLatencyMs - b.averageLatencyMs;
+      });
 
     if (Math.random() < this.epsilon) {
       return { ...this.exploreRandom(taskType, complexity), rankedOptions };
@@ -307,7 +343,13 @@ export class StrategyEngine {
     // Sort descending by score so we try the best candidate first.
     const ranked = [...candidates]
       .map(s => ({ stats: s, score: this.scoreStats(s, weights) }))
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => {
+        const diff = b.score - a.score;
+        if (Math.abs(diff) > 1e-6) return diff;
+        const costDiff = a.stats.averageCostUsd - b.stats.averageCostUsd;
+        if (Math.abs(costDiff) > 1e-9) return costDiff;
+        return a.stats.averageLatencyMs - b.stats.averageLatencyMs;
+      });
 
     for (const { stats: w, score: bestScore } of ranked) {
       try {

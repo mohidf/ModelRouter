@@ -313,56 +313,91 @@ describe('StrategyEngine — scoring direction', () => {
 
 describe('StrategyEngine — score normalisation', () => {
 
-  it('cost at MAX_COST_USD ($0.10) is penalised exactly twice as much as cost at $0.05', async () => {
-    // Why: this is the core normalization invariant.
-    // normCost = cost / MAX_COST_USD:
-    //   $0.05 → 0.5,   $0.10 → 1.0
-    // Score difference = costWeight * (1.0 - 0.5) = costWeight * 0.5
+  it('cost at $0.10 is penalised exactly twice as much as cost at $0.05', async () => {
+    // Why: linear normalisation means proportional costs → proportional penalties.
+    // normCost = cost / MAX_COST_USD (MAX_COST_USD = $0.20):
+    //   $0.05 → 0.25,   $0.10 → 0.50
+    // Score difference = costWeight * (0.50 - 0.25) = costWeight * 0.25
     //
-    // Before the fix, raw costs were used:
-    //   $0.05 → costWeight * 0.05 = 0.40 (with old costWeight=8)
-    //   $0.10 → costWeight * 0.10 = 0.80
-    //   difference: 0.40 — which had unpredictable relative impact
-    //
-    // With normalisation, the score difference is exactly costWeight * 0.5,
-    // regardless of what the raw cost units are.
+    // $0.10 / $0.05 = 2.0 — "twice the cost" produces "twice the penalty".
+    // With normalisation, the weight magnitudes are dimensionless and directly
+    // comparable regardless of the raw currency units used by individual providers.
     const expensive = makeStat('openai', 'premium',  { averageCostUsd: 0.10, averageConfidence: 1.0, averageLatencyMs: 500, escalationRate: 0.0 });
-    const half      = makeStat('openai', 'balanced', { averageCostUsd: 0.05, averageConfidence: 1.0, averageLatencyMs: 500, escalationRate: 0.0 });
+    const cheaper   = makeStat('openai', 'balanced', { averageCostUsd: 0.05, averageConfidence: 1.0, averageLatencyMs: 500, escalationRate: 0.0 });
 
-    mockGetAllStats.mockResolvedValue([expensive, half]);
+    mockGetAllStats.mockResolvedValue([expensive, cheaper]);
     const engine = new StrategyEngine(0);
 
-    // Use coding weights: costWeight = 1.0, so score diff = 1.0 * 0.5 = 0.5
     const ranked = await engine.rankStats('coding');
 
-    const costWeight = DEFAULT_TASK_WEIGHTS.coding.costWeight;
-    const expectedDiff = costWeight * (1.0 - 0.5); // normCost diff = 0.5
+    // MAX_COST_USD = $0.20: normCost(0.10) = 0.50, normCost(0.05) = 0.25
+    const costWeight   = DEFAULT_TASK_WEIGHTS.coding.costWeight;
+    const expectedDiff = costWeight * (0.50 - 0.25); // normCost diff = 0.25
 
-    expect(ranked[0].averageCostUsd).toBe(0.05);    // cheaper ranks first
-    expect(ranked[0].score - ranked[1].score).toBeCloseTo(expectedDiff, 5);
+    expect(ranked[0].averageCostUsd).toBe(0.05);  // cheaper ranks first
+    expect(ranked[0].score - ranked[1].score).toBeCloseTo(expectedDiff, 4);
   });
 
-  it('latency at MAX_LATENCY_MS (5000ms) is penalised exactly twice as much as 2500ms', async () => {
+  it('latency at 15000ms is penalised exactly twice as much as 7500ms', async () => {
     // Why: same principle as cost — normalised latency = ms / MAX_LATENCY_MS.
-    //   2500ms → 0.5,  5000ms → 1.0
-    // Score difference = latencyWeight * 0.5
+    // MAX_LATENCY_MS = 30_000:
+    //   7500ms  → 0.25,   15000ms → 0.50
+    // Score difference = latencyWeight * (0.50 - 0.25) = latencyWeight * 0.25
     //
-    // Before the fix, latencyWeight * rawMs = 0.001 * 2500 = 2.5 — a huge
-    // value that overwhelmed the other terms, making latency the dominant
-    // factor regardless of the weight assignment.
-    const slow = makeStat('openai', 'premium',  { averageLatencyMs: 5000, averageConfidence: 1.0, averageCostUsd: 0.001, escalationRate: 0.0 });
-    const half = makeStat('openai', 'balanced', { averageLatencyMs: 2500, averageConfidence: 1.0, averageCostUsd: 0.001, escalationRate: 0.0 });
+    // The 30 000ms ceiling avoids clamping real-world model latencies
+    // (10 000ms for Opus, 5 000ms for Sonnet, 1 000ms for mini models)
+    // while keeping the penalty well-spread across the valid range.
+    const slow = makeStat('openai', 'premium',  { averageLatencyMs: 15_000, averageConfidence: 1.0, averageCostUsd: 0.001, escalationRate: 0.0 });
+    const fast = makeStat('openai', 'balanced', { averageLatencyMs: 7_500,  averageConfidence: 1.0, averageCostUsd: 0.001, escalationRate: 0.0 });
 
-    mockGetAllStats.mockResolvedValue([slow, half]);
+    mockGetAllStats.mockResolvedValue([slow, fast]);
     const engine = new StrategyEngine(0);
 
     const ranked = await engine.rankStats('coding');
 
+    // MAX_LATENCY_MS = 30_000: normLatency(15000) = 0.50, normLatency(7500) = 0.25
     const latencyWeight = DEFAULT_TASK_WEIGHTS.coding.latencyWeight;
-    const expectedDiff  = latencyWeight * (1.0 - 0.5); // normLatency diff = 0.5
+    const expectedDiff  = latencyWeight * (0.50 - 0.25); // normLatency diff = 0.25
 
-    expect(ranked[0].averageLatencyMs).toBe(2500);   // faster ranks first
-    expect(ranked[0].score - ranked[1].score).toBeCloseTo(expectedDiff, 5);
+    expect(ranked[0].averageLatencyMs).toBe(7_500);  // faster ranks first
+    expect(ranked[0].score - ranked[1].score).toBeCloseTo(expectedDiff, 4);
+  });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4b. DB error resilience — getAllStats() failure falls back to static routing
+//
+// If the Supabase client throws (network down, auth error, timeout), the
+// engine must fall back to static routing rather than bubbling an unhandled
+// rejection to the caller and returning a 500 to the user.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('StrategyEngine — DB error resilience', () => {
+
+  it('falls back to static routing when getAllStats() throws', async () => {
+    // Why: Supabase can fail transiently (network, cold start, quota exceeded).
+    // The router must remain functional and serve users with the static fallback
+    // rather than propagating a 500. Broken performance DB ≠ broken router.
+    mockGetAllStats.mockRejectedValue(new Error('Supabase connection timeout'));
+
+    const engine   = new StrategyEngine(0);
+    const decision = await engine.choose('coding', 'medium');
+
+    expect(mockResolve).toHaveBeenCalledWith('coding', 'medium');
+    expect(decision.usedFallback).toBe(true);
+    expect(decision.explored).toBe(false);
+    expect(decision.rankedOptions).toHaveLength(0);
+  });
+
+  it('does not throw when getAllStats() rejects', async () => {
+    // Why: an unhandled rejection in a fire-and-forget context is a process
+    // crash risk. choose() must always resolve (never reject) so callers
+    // can safely await it without a try/catch.
+    mockGetAllStats.mockRejectedValue(new Error('DB unavailable'));
+
+    const engine = new StrategyEngine(0);
+    await expect(engine.choose('general', 'low')).resolves.toBeDefined();
   });
 
 });

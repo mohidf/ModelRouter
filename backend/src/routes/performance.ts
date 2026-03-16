@@ -21,17 +21,25 @@ const router = Router();
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
   const { epsilon } = strategyEngine;
 
+  // Fire all 11 domain queries in parallel rather than sequentially.
+  // Promise.allSettled guarantees every slot is filled even if individual
+  // Supabase calls fail — a single domain error never blocks the others.
+  const results = await Promise.allSettled(
+    DOMAINS.map(domain => strategyEngine.rankStats(domain)),
+  );
+
   const byTaskType: Record<string, unknown> = {};
-  for (const domain of DOMAINS) {
-    try {
-      const ranked = await strategyEngine.rankStats(domain);
+  for (let i = 0; i < DOMAINS.length; i++) {
+    const domain = DOMAINS[i];
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      const ranked = result.value;
       byTaskType[domain] = {
         best:      ranked[0]        ?? null,
         bestScore: ranked[0]?.score ?? null,
         all:       ranked,
       };
-    } catch {
-      // A Supabase error on one domain must not fail the entire response.
+    } else {
       byTaskType[domain] = { best: null, bestScore: null, all: [] };
     }
   }

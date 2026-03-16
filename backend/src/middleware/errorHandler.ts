@@ -13,5 +13,5 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   logger.error('Unhandled error', { message: err.message, stack: err.stack });
-  res.status(500).json({ error: 'Internal server error.', details: err.message });
+  res.status(500).json({ error: 'Internal server error.' });
 }

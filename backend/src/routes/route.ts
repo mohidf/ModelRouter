@@ -23,8 +23,20 @@ router.post('/', async (req: Request, res: Response, next: NextFunction): Promis
     return;
   }
 
+  const MAX_PROMPT_CHARS = 20_000;
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    res.status(400).json({ error: `Prompt must be at most ${MAX_PROMPT_CHARS} characters.` });
+    return;
+  }
+
+  const MAX_TOKENS_CEILING = 32_000;
+  const validatedMaxTokens =
+    typeof maxTokens === 'number' && maxTokens > 0
+      ? Math.min(Math.floor(maxTokens), MAX_TOKENS_CEILING)
+      : undefined;
+
   try {
-    const result = await routingEngine.route({ prompt, maxTokens, preferCost, optimizationMode, customWeights });
+    const result = await routingEngine.route({ prompt, maxTokens: validatedMaxTokens, preferCost, optimizationMode, customWeights });
     res.status(200).json(result);
   } catch (err) {
     next(err);

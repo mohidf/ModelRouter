@@ -111,12 +111,13 @@ class MetricsStore {
     tokens: number,
     costUsd: number,
   ): void {
-    const acc = this.perModel.get(model) ?? { calls: 0, totalLatencyMs: 0, totalTokens: 0, totalCostUsd: 0 };
-    acc.calls++;
-    acc.totalLatencyMs += latencyMs;
-    acc.totalTokens    += tokens;
-    acc.totalCostUsd   += costUsd;
-    this.perModel.set(model, acc);
+    const prev = this.perModel.get(model) ?? { calls: 0, totalLatencyMs: 0, totalTokens: 0, totalCostUsd: 0 };
+    this.perModel.set(model, {
+      calls:          prev.calls + 1,
+      totalLatencyMs: prev.totalLatencyMs + latencyMs,
+      totalTokens:    prev.totalTokens + tokens,
+      totalCostUsd:   prev.totalCostUsd + costUsd,
+    });
   }
 }
 

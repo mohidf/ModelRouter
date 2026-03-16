@@ -64,6 +64,37 @@ export class RateLimiter {
     state.count++;
   }
 
+  /**
+   * Number of IP entries currently tracked in memory.
+   * Includes both live and expired-but-not-yet-pruned entries.
+   * Useful for health checks and observing the effect of prune().
+   */
+  get size(): number {
+    return this.clients.size;
+  }
+
+  /**
+   * Remove all entries whose window has already expired.
+   *
+   * Call this periodically (e.g. every 5–15 minutes) to prevent unbounded
+   * Map growth on servers that receive requests from many unique IPs.
+   * Expired entries are harmless — they reset automatically on the next request
+   * from that IP — but they accumulate memory until pruned.
+   *
+   * Returns the number of entries removed.
+   */
+  prune(): number {
+    const now = Date.now();
+    let removed = 0;
+    for (const [key, state] of this.clients) {
+      if (now >= state.resetAt) {
+        this.clients.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   /** Current window snapshot for a specific client — useful for diagnostics. */
   statusFor(clientKey: string): RateLimiterStatus {
     const now   = Date.now();
