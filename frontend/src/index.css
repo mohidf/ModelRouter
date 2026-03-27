@@ -573,3 +573,11 @@ input:focus, textarea:focus, select:focus {
   color: var(--muted); font-weight: 600;
 }
 .prose-router td { border: 1px solid var(--border); padding: 0.4rem 0.75rem; color: var(--text-2); }
+
+/* ── Hover utilities — use instead of onMouseEnter/onMouseLeave ── */
+.hover-bg-2 { transition: background 0.12s; }
+.hover-bg-2:hover { background: var(--surface-2) !important; }
+.hover-bg-3 { transition: background 0.12s; }
+.hover-bg-3:hover { background: var(--surface-3) !important; }
+.btn-icon { transition: background 0.12s, color 0.12s; color: var(--text-2); }
+.btn-icon:hover { background: var(--surface-3) !important; color: var(--text) !important; }

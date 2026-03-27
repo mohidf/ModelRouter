@@ -81,14 +81,18 @@ export class TogetherProvider implements IProvider {
     model:   string,
     options: GenerateOptions,
   ): Promise<GenerateResult> {
-    const { tier, maxTokens } = options;
+    const { tier, maxTokens, apiKey } = options;
+    // Use a per-request client when the caller supplies their own key.
+    const client = apiKey
+      ? new OpenAI({ apiKey, baseURL: 'https://api.together.xyz/v1', maxRetries: 2 })
+      : getClient();
     const start = Date.now();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
-      const completion = await getClient().chat.completions.create(
+      const completion = await client.chat.completions.create(
         {
           model,
           max_tokens: maxTokens,

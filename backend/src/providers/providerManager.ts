@@ -221,15 +221,20 @@ export class ProviderManager {
    * Run a full provider call (generate + estimateCost) for an already-resolved
    * model. Injects tier into GenerateOptions so providers never infer it from
    * the model string. Keeps the router free from calling provider methods directly.
+   *
+   * When `userApiKeys` is supplied, the matching provider key (if present) is
+   * forwarded to the provider as a per-request override, falling back to the
+   * provider's env-var singleton when absent.
    */
   async dispatch(
     resolved: ResolvedModel,
     prompt:   string,
-    options:  { maxTokens: number },
+    options:  { maxTokens: number; userApiKeys?: Record<string, string> },
   ): Promise<DispatchResult> {
     const genOptions: GenerateOptions = {
       maxTokens: options.maxTokens,
       tier:      resolved.tier,
+      apiKey:    options.userApiKeys?.[resolved.provider.name],
     };
 
     const result = await resolved.provider.generate(prompt, resolved.model, genOptions);

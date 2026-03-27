@@ -21,6 +21,13 @@ export interface GenerateOptions {
    * simulation — never infer tier from the model string.
    */
   tier: ModelTier;
+  /**
+   * Optional per-request API key override (user-supplied).
+   * When present, the provider creates a short-lived client with this key
+   * instead of using the singleton backed by the environment variable.
+   * Falls back to the env-var singleton when absent.
+   */
+  apiKey?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ interface EscalationInput {
   confidence:    number;
   prompt:        string;
   maxTokens:     number;
+  userApiKeys:   Record<string, string>;
 }
 
 interface EscalationOutcome {
@@ -98,11 +99,13 @@ export class RoutingEngine {
     preferCost?:       unknown;
     optimizationMode?: unknown;
     customWeights?:    unknown;
+    userApiKeys?:      Record<string, string>;
   }): Promise<RouteResponse> {
-    const start      = Date.now();
-    const prompt     = (raw.prompt as string).trim();
-    const maxTokens  = typeof raw.maxTokens  === 'number'  ? raw.maxTokens  : config.defaultMaxTokens;
-    const preferCost = typeof raw.preferCost === 'boolean' ? raw.preferCost : false;
+    const start       = Date.now();
+    const prompt      = (raw.prompt as string).trim();
+    const maxTokens   = typeof raw.maxTokens  === 'number'  ? raw.maxTokens  : config.defaultMaxTokens;
+    const preferCost  = typeof raw.preferCost === 'boolean' ? raw.preferCost : false;
+    const userApiKeys = raw.userApiKeys ?? {};
 
     // Build per-request weight override config
     const overrideConfig: WeightOverrideConfig = {};
@@ -125,12 +128,12 @@ export class RoutingEngine {
     const { result: initialResult, cost: initialCost } = await providerManager.dispatch(
       initial,
       prompt,
-      { maxTokens },
+      { maxTokens, userApiKeys },
     );
 
     // 3. Escalate if needed — records both attempts in PerformanceStore
     const { final, finalResult, finalCost, didEscalate } = await this.escalateIfNeeded({
-      initial, initialResult, initialCost, domain, confidence, prompt, maxTokens,
+      initial, initialResult, initialCost, domain, confidence, prompt, maxTokens, userApiKeys,
     });
 
     // 4. Update metrics
@@ -226,7 +229,7 @@ export class RoutingEngine {
         const { result: finalResult, cost: finalCost } = await providerManager.dispatch(
           final,
           p.prompt,
-          { maxTokens: p.maxTokens },
+          { maxTokens: p.maxTokens, userApiKeys: p.userApiKeys },
         );
 
         // Record both attempts

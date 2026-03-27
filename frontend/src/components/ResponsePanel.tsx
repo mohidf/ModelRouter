@@ -284,13 +284,11 @@ export default function ResponsePanel({ result, error, loading }: Props) {
               type="button"
               onClick={() => setShowOptions(v => !v)}
               aria-expanded={showOptions}
+              className="hover-bg-2"
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 padding: '9px 14px', background: 'none', border: 'none', cursor: 'pointer',
-                transition: 'background 0.12s',
               }}
-              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
             >
               <span className="label">Evaluated options ({evaluatedOptions.length})</span>
               <svg

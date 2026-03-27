@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import cors from 'cors';
 import express from 'express';
 import { config, validateRequiredEnv } from './config';
 import { requestLogger } from './middleware/requestLogger';
@@ -7,6 +8,7 @@ import { RateLimiter, createRateLimiterMiddleware } from './middleware/rateLimit
 import routeRouter      from './routes/route';
 import metricsRouter    from './routes/metrics';
 import performanceRouter from './routes/performance';
+import keysRouter        from './routes/keys';
 import { logger } from './utils/logger';
 import { hybridClassifier } from './services/hybridClassifier';
 
@@ -19,6 +21,9 @@ const app = express();
 app.set('trust proxy', 1);
 
 // --- Middleware ---
+app.use(cors({
+  origin: process.env.CORS_ORIGIN?.split(',').map(o => o.trim()) ?? ['http://localhost:5173'],
+}));
 app.use(express.json({ limit: config.bodyLimit }));
 app.use(requestLogger);
 
@@ -39,8 +44,12 @@ setInterval(() => {
 app.use('/route',       createRateLimiterMiddleware(rateLimiter),  routeRouter);
 app.use('/metrics',     createRateLimiterMiddleware(metaLimiter),  metricsRouter);
 app.use('/performance', createRateLimiterMiddleware(metaLimiter),  performanceRouter);
+app.use('/keys',        createRateLimiterMiddleware(metaLimiter),  keysRouter);
 
-// Health check
+// Health checks
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

@@ -60,14 +60,19 @@ export class ClaudeProvider implements IProvider {
     model:   string,
     options: GenerateOptions,
   ): Promise<GenerateResult> {
-    const { tier, maxTokens } = options;
+    const { tier, maxTokens, apiKey } = options;
+    // Use a per-request client when the caller supplies their own key.
+    // This avoids mutating the shared singleton and is safe for concurrent requests.
+    const client = apiKey
+      ? new Anthropic({ apiKey, maxRetries: 2 })
+      : getClient();
     const start = Date.now();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
-      const message = await getClient().messages.create(
+      const message = await client.messages.create(
         {
           model,
           max_tokens: maxTokens,

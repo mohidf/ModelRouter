@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { MetricsSnapshot } from '../types';
+import { API_BASE } from '../lib/api';
 
 function Refresh({ spin }: { spin: boolean }) {
   return (
@@ -61,7 +62,7 @@ export default function MetricsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/metrics');
+      const res = await fetch(`${API_BASE}/metrics`);
       if (!res.ok) throw new Error('Failed to fetch metrics');
       setData(await res.json());
     } catch (e) {
@@ -172,9 +173,8 @@ export default function MetricsPanel() {
                     {Object.entries(data.perModel).map(([model, m], i, arr) => (
                       <tr
                         key={model}
-                        style={{ borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none', transition: 'background 0.1s' }}
-                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
+                        className="hover-bg-2"
+                        style={{ borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none' }}
                       >
                         <td style={{ padding: '11px 18px' }}>
                           <span style={{

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { InsightsResponse, TaskInsight, ScoredStats, ModelTier, TaskDomain } from '../types';
+import { API_BASE } from '../lib/api';
 import { ALL_DOMAINS } from '../types';
 import { modelDisplayName } from '../utils/modelDisplay';
 
@@ -156,15 +157,14 @@ function DomainCard({ domain, insight }: { domain: TaskDomain; insight: TaskInsi
                 type="button"
                 onClick={() => setShowAll(v => !v)}
                 aria-expanded={showAll}
+                className="hover-bg-3"
                 style={{
                   width: '100%', padding: '6px 14px',
                   fontSize: 12, color: 'var(--text-2)',
                   background: 'none', border: 'none', cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 5,
-                  borderRadius: 'var(--radius-sm)', transition: 'background 0.12s',
+                  borderRadius: 'var(--radius-sm)',
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-3)'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
               >
                 <svg
                   width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"
@@ -194,7 +194,7 @@ export default function InsightsPanel() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res  = await fetch('/api/performance');
+      const res  = await fetch(`${API_BASE}/performance`);
       const data = await res.json();
       if (!res.ok) setError(data.error ?? 'Failed.');
       else setInsights(data as InsightsResponse);

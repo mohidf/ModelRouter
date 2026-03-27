@@ -84,14 +84,12 @@ export default function HistoryPanel({ history }: Props) {
               <button
                 onClick={() => setExpandedId(prev => prev === entry.id ? null : entry.id)}
                 aria-expanded={expanded}
+                className="hover-bg-2"
                 style={{
                   width: '100%', display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 16px', background: 'none', border: 'none', cursor: 'pointer',
                   textAlign: 'left', borderRadius: 'var(--radius-lg)',
-                  transition: 'background 0.12s',
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-2)'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'none'; }}
               >
                 {/* Domain dot */}
                 <div style={{
