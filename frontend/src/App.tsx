@@ -83,7 +83,17 @@ function MainApp() {
   const [result,  setResult]  = useState<RouteResponse | null>(null);
   const [error,   setError]   = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => {
+    try {
+      const saved = localStorage.getItem('mr-history');
+      if (!saved) return [];
+      const parsed = JSON.parse(saved) as HistoryEntry[];
+      // Rehydrate timestamp strings back to Date objects
+      return parsed.map(e => ({ ...e, timestamp: new Date(e.timestamp) }));
+    } catch {
+      return [];
+    }
+  });
   const [theme,   setTheme]   = useState<Theme>(() => {
     return (localStorage.getItem('mr-theme') as Theme | null) ?? 'dark';
   });
@@ -133,7 +143,9 @@ function MainApp() {
           const entry: HistoryEntry = {
             id: crypto.randomUUID(), prompt, result: routeResult, timestamp: new Date(),
           };
-          return [entry, ...prev].slice(0, 10);
+          const next = [entry, ...prev].slice(0, 10);
+          localStorage.setItem('mr-history', JSON.stringify(next));
+          return next;
         });
       }
     } catch {
