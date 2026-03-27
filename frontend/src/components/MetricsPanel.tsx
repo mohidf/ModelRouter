@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import type { MetricsSnapshot } from '../types';
-import { API_BASE } from '../lib/api';
 
 function Refresh({ spin }: { spin: boolean }) {
   return (
@@ -62,7 +61,7 @@ export default function MetricsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/metrics`);
+      const res = await fetch('/api/metrics');
       if (!res.ok) throw new Error('Failed to fetch metrics');
       setData(await res.json());
     } catch (e) {

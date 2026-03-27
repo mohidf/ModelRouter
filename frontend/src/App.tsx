@@ -11,7 +11,6 @@ import { LoginPage } from './pages/LoginPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { supabase } from './lib/supabase';
-import { API_BASE } from './lib/api';
 import type { RouteResponse, HistoryEntry, OptimizationMode } from './types';
 
 type Theme = 'light' | 'dark';
@@ -113,7 +112,7 @@ function MainApp() {
         headers['Authorization'] = `Bearer ${session.access_token}`;
       }
 
-      const res = await fetch(`${API_BASE}/route`, {
+      const res = await fetch('/api/route', {
         method: 'POST',
         headers,
         body: JSON.stringify({ prompt, ...options }),

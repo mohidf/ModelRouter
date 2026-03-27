@@ -8,7 +8,6 @@
 
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { API_BASE } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -77,7 +76,7 @@ export function SettingsPage() {
     setLoadError(null);
     try {
       const token = await getToken();
-      const res   = await fetch(`${API_BASE}/keys`, {
+      const res   = await fetch('/api/keys', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) { setLoadError('Failed to load keys.'); return; }
@@ -114,7 +113,7 @@ export function SettingsPage() {
 
     try {
       const token = await getToken();
-      const res   = await fetch(`${API_BASE}/keys`, {
+      const res   = await fetch('/api/keys', {
         method:  'POST',
         headers: {
           'Content-Type':  'application/json',
@@ -143,7 +142,7 @@ export function SettingsPage() {
 
     try {
       const token = await getToken();
-      const res   = await fetch(`${API_BASE}/keys/${providerId}`, {
+      const res   = await fetch(`/api/keys/${providerId}`, {
         method:  'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });

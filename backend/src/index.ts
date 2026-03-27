@@ -21,9 +21,7 @@ const app = express();
 app.set('trust proxy', 1);
 
 // --- Middleware ---
-app.use(cors({
-  origin: process.env.CORS_ORIGIN?.split(',').map(o => o.trim()) ?? ['http://localhost:5173'],
-}));
+app.use(cors({ origin: process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173' }));
 app.use(express.json({ limit: config.bodyLimit }));
 app.use(requestLogger);
 
@@ -46,10 +44,7 @@ app.use('/metrics',     createRateLimiterMiddleware(metaLimiter),  metricsRouter
 app.use('/performance', createRateLimiterMiddleware(metaLimiter),  performanceRouter);
 app.use('/keys',        createRateLimiterMiddleware(metaLimiter),  keysRouter);
 
-// Health checks
-app.get('/', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+// Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

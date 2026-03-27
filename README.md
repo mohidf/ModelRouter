@@ -155,7 +155,6 @@ Key optional variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CONFIDENCE_THRESHOLD` | `0.20` | Margin below which escalation fires |
-| `ESCALATION_ENABLED` | `true` | Disable to always use primary model |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model for classifier |
 
 ### 4. Apply database migrations

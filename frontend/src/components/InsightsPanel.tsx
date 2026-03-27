@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { InsightsResponse, TaskInsight, ScoredStats, ModelTier, TaskDomain } from '../types';
-import { API_BASE } from '../lib/api';
 import { ALL_DOMAINS } from '../types';
 import { modelDisplayName } from '../utils/modelDisplay';
 
@@ -194,7 +193,7 @@ export default function InsightsPanel() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res  = await fetch(`${API_BASE}/performance`);
+      const res  = await fetch('/api/performance');
       const data = await res.json();
       if (!res.ok) setError(data.error ?? 'Failed.');
       else setInsights(data as InsightsResponse);
