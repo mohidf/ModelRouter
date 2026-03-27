@@ -83,17 +83,7 @@ function MainApp() {
   const [result,  setResult]  = useState<RouteResponse | null>(null);
   const [error,   setError]   = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<HistoryEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem('mr-history');
-      if (!saved) return [];
-      const parsed = JSON.parse(saved) as HistoryEntry[];
-      // Rehydrate timestamp strings back to Date objects
-      return parsed.map(e => ({ ...e, timestamp: new Date(e.timestamp) }));
-    } catch {
-      return [];
-    }
-  });
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [theme,   setTheme]   = useState<Theme>(() => {
     return (localStorage.getItem('mr-theme') as Theme | null) ?? 'dark';
   });
@@ -107,6 +97,28 @@ function MainApp() {
   useEffect(() => {
     if (isNewUser) navigate('/onboarding', { replace: true });
   }, [isNewUser, navigate]);
+
+  // Load history from backend on mount
+  useEffect(() => {
+    async function loadHistory() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      try {
+        const res = await fetch('/api/history', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!res.ok) return;
+        const body = await res.json() as { history: Array<{ id: string; prompt: string; result: RouteResponse; created_at: string }> };
+        setHistory(body.history.map(e => ({
+          id:        e.id,
+          prompt:    e.prompt,
+          result:    e.result,
+          timestamp: new Date(e.created_at),
+        })));
+      } catch { /* non-fatal */ }
+    }
+    loadHistory();
+  }, []);
 
   async function handleSubmit(
     prompt: string,
@@ -139,14 +151,24 @@ function MainApp() {
       } else {
         const routeResult = data as RouteResponse;
         setResult(routeResult);
-        setHistory(prev => {
-          const entry: HistoryEntry = {
-            id: crypto.randomUUID(), prompt, result: routeResult, timestamp: new Date(),
-          };
-          const next = [entry, ...prev].slice(0, 10);
-          localStorage.setItem('mr-history', JSON.stringify(next));
-          return next;
-        });
+        // Save to backend and prepend to local state
+        if (session?.access_token) {
+          fetch('/api/history', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+            body:    JSON.stringify({ prompt, result: routeResult }),
+          }).then(async r => {
+            if (!r.ok) return;
+            const body = await r.json() as { entry: { id: string; prompt: string; result: RouteResponse; created_at: string } };
+            const entry: HistoryEntry = {
+              id:        body.entry.id,
+              prompt:    body.entry.prompt,
+              result:    body.entry.result,
+              timestamp: new Date(body.entry.created_at),
+            };
+            setHistory(prev => [entry, ...prev].slice(0, 20));
+          }).catch(() => { /* non-fatal */ });
+        }
       }
     } catch {
       setError('Could not reach the backend. Is it running?');

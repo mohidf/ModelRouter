@@ -9,6 +9,7 @@ import routeRouter      from './routes/route';
 import metricsRouter    from './routes/metrics';
 import performanceRouter from './routes/performance';
 import keysRouter        from './routes/keys';
+import historyRouter     from './routes/history';
 import { logger } from './utils/logger';
 import { hybridClassifier } from './services/hybridClassifier';
 
@@ -43,6 +44,7 @@ app.use('/route',       createRateLimiterMiddleware(rateLimiter),  routeRouter);
 app.use('/metrics',     createRateLimiterMiddleware(metaLimiter),  metricsRouter);
 app.use('/performance', createRateLimiterMiddleware(metaLimiter),  performanceRouter);
 app.use('/keys',        createRateLimiterMiddleware(metaLimiter),  keysRouter);
+app.use('/history',     createRateLimiterMiddleware(metaLimiter),  historyRouter);
 
 // Health check
 app.get('/health', (_req, res) => {
