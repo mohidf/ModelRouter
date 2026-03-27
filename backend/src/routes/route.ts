@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { routingEngine } from '../services/router';
-import { optionalAuth } from '../middleware/auth';
+import { requireAuth } from '../middleware/auth';
 import { getUserApiKeys } from '../services/userKeyService';
 
 const router = Router();
@@ -8,20 +8,10 @@ const router = Router();
 /**
  * POST /route
  *
- * Body: {
- *   prompt:            string
- *   maxTokens?:        number
- *   preferCost?:       boolean
- *   optimizationMode?: 'cost' | 'quality' | 'balanced'
- *   customWeights?:    { confidenceWeight?, costWeight?, latencyWeight?, escalationWeight? }
- * }
- * Returns: RouteResponse — classification, selected model, and completion.
- *
- * Authentication is optional. Authenticated users have their stored API keys
- * fetched and used in place of the system environment keys for matching providers.
- * Anonymous users are routed normally using the system keys.
+ * Requires authentication. Uses the authenticated user's stored API keys.
+ * Returns 403 if the user has not added any API keys yet.
  */
-router.post('/', optionalAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const { prompt, maxTokens, preferCost, optimizationMode, customWeights } = req.body ?? {};
 
   if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
@@ -41,11 +31,15 @@ router.post('/', optionalAuth, async (req: Request, res: Response, next: NextFun
       ? Math.min(Math.floor(maxTokens), MAX_TOKENS_CEILING)
       : undefined;
 
-  // Fetch user-supplied API keys when the request is authenticated.
-  // Falls back to an empty map (system keys) for anonymous callers.
-  const userApiKeys = req.userId
-    ? await getUserApiKeys(req.userId)
-    : {};
+  const userApiKeys = await getUserApiKeys(req.userId!);
+
+  if (Object.keys(userApiKeys).length === 0) {
+    res.status(403).json({
+      error: 'NO_KEYS',
+      message: 'You have not added any API keys. Go to Settings to add your keys.',
+    });
+    return;
+  }
 
   try {
     const result = await routingEngine.route({

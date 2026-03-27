@@ -120,7 +120,12 @@ function MainApp() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError((data as { error?: string }).error ?? 'Request failed.');
+        const body = data as { error?: string; message?: string };
+        if (body.error === 'NO_KEYS') {
+          setError('NO_KEYS');
+        } else {
+          setError(body.message ?? body.error ?? 'Request failed.');
+        }
         setResult(null);
       } else {
         const routeResult = data as RouteResponse;
@@ -251,6 +256,20 @@ function MainApp() {
               <div className="chat-messages">
                 {!result && !loading && !error
                   ? <ChatWelcome />
+                  : error === 'NO_KEYS'
+                  ? (
+                    <div className="anim-fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                      <div style={{ maxWidth: 400, textAlign: 'center', padding: '0 24px' }}>
+                        <p style={{ fontSize: 15, color: 'var(--text)', fontWeight: 600, margin: '0 0 8px' }}>No API keys added</p>
+                        <p style={{ fontSize: 13.5, color: 'var(--text-2)', margin: '0 0 20px', lineHeight: 1.6 }}>
+                          You need to add at least one API key before routing prompts.
+                        </p>
+                        <Link to="/settings" style={{ color: 'var(--accent)', fontSize: 13.5, fontWeight: 500 }}>
+                          Go to Settings →
+                        </Link>
+                      </div>
+                    </div>
+                  )
                   : <div className="anim-fade-in" style={{ height: '100%' }}><ResponsePanel result={result} error={error} loading={loading} /></div>
                 }
               </div>
