@@ -270,7 +270,34 @@ function MainApp() {
                       </div>
                     </div>
                   )
-                  : <div className="anim-fade-in" style={{ height: '100%' }}><ResponsePanel result={result} error={error} loading={loading} /></div>
+                  : (
+                    <div className="anim-fade-in" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                      {result?.freeTier && (
+                        <div style={{
+                          display:        'flex',
+                          alignItems:     'center',
+                          justifyContent: 'space-between',
+                          gap:            12,
+                          padding:        '9px 16px',
+                          background:     'var(--surface-2)',
+                          borderBottom:   '1px solid var(--border)',
+                          fontSize:       13,
+                          color:          'var(--text-2)',
+                          flexShrink:     0,
+                        }}>
+                          <span>
+                            You're on the <strong style={{ color: 'var(--text)' }}>free tier</strong> — responses are powered by Groq's open-source models. Add your own API keys for full routing across OpenAI, Anthropic, and Together AI.
+                          </span>
+                          <Link to="/settings" style={{ color: 'var(--accent)', fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                            Add keys →
+                          </Link>
+                        </div>
+                      )}
+                      <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <ResponsePanel result={result} error={error} loading={loading} />
+                      </div>
+                    </div>
+                  )
                 }
               </div>
               <div className="chat-input-footer">

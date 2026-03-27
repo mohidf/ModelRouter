@@ -103,4 +103,9 @@ export interface RouteResponse {
   strategyMode: 'fallback' | 'exploration' | 'exploitation';
   /** All scored candidates, sorted best-first. Empty when strategyMode is 'fallback'. */
   evaluatedOptions: EvaluatedOption[];
+  /**
+   * True when the request was served by the system's free Groq tier because
+   * the user has not yet added their own API keys.
+   */
+  freeTier?: boolean;
 }

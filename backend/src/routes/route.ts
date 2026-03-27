@@ -2,15 +2,54 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { routingEngine } from '../services/router';
 import { requireAuth } from '../middleware/auth';
 import { getUserApiKeys } from '../services/userKeyService';
+import { groqProvider, GROQ_FREE_MODELS } from '../providers/groqProvider';
+import { hybridClassifier } from '../services/hybridClassifier';
+import type { RouteResponse, ModelSelection } from '../providers/types';
+import { config } from '../config';
 
 const router = Router();
 
-/**
- * POST /route
- *
- * Requires authentication. Uses the authenticated user's stored API keys.
- * Returns 403 if the user has not added any API keys yet.
- */
+// ---------------------------------------------------------------------------
+// Free-tier handler — called when the user has no stored API keys.
+// Classifies the prompt and dispatches directly to Groq using the system key.
+// ---------------------------------------------------------------------------
+
+async function routeFreeTier(prompt: string, maxTokens: number): Promise<RouteResponse> {
+  const classification = await hybridClassifier.classify(prompt);
+  const { complexity } = classification;
+
+  const tier  = complexity === 'high' ? 'premium' : complexity === 'medium' ? 'balanced' : 'cheap';
+  const model = GROQ_FREE_MODELS[tier];
+
+  const result = await groqProvider.generate(prompt, model, { tier, maxTokens });
+  const cost   = groqProvider.estimateCost(model, tier, result.inputTokens, result.outputTokens);
+
+  const modelSelection: ModelSelection = {
+    provider:        'groq',
+    model,
+    tier,
+    reason:          'Free tier — Groq Llama model',
+    modelConfidence: result.modelConfidence,
+  };
+
+  return {
+    classification,
+    initialModel:     modelSelection,
+    finalModel:       modelSelection,
+    escalated:        false,
+    response:         result.text,
+    latencyMs:        result.latencyMs,
+    totalCostUsd:     cost.totalCostUsd,
+    strategyMode:     'fallback',
+    evaluatedOptions: [],
+    freeTier:         true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// POST /route
+// ---------------------------------------------------------------------------
+
 router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const { prompt, maxTokens, preferCost, optimizationMode, customWeights } = req.body ?? {};
 
@@ -29,15 +68,26 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
   const validatedMaxTokens =
     typeof maxTokens === 'number' && maxTokens > 0
       ? Math.min(Math.floor(maxTokens), MAX_TOKENS_CEILING)
-      : undefined;
+      : config.defaultMaxTokens;
 
   const userApiKeys = await getUserApiKeys(req.userId!);
+  const hasUserKeys = Object.keys(userApiKeys).length > 0;
 
-  if (Object.keys(userApiKeys).length === 0) {
-    res.status(403).json({
-      error: 'NO_KEYS',
-      message: 'You have not added any API keys. Go to Settings to add your keys.',
-    });
+  // No user keys — serve via free Groq tier if system key is available.
+  if (!hasUserKeys) {
+    if (!process.env.GROQ_API_KEY) {
+      res.status(403).json({
+        error:   'NO_KEYS',
+        message: 'You have not added any API keys. Go to Settings to add your keys.',
+      });
+      return;
+    }
+    try {
+      const result = await routeFreeTier(prompt, validatedMaxTokens);
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
     return;
   }
 

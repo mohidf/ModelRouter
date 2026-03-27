@@ -57,6 +57,7 @@ export interface RouteResponse {
   totalCostUsd: number;
   strategyMode: 'fallback' | 'exploration' | 'exploitation';
   evaluatedOptions: EvaluatedOption[];
+  freeTier?: boolean;
 }
 
 export interface ModelMetrics {
